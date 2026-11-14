@@ -21,8 +21,8 @@ const STYLE = {
   sim: 'https://tiles.openfreemap.org/styles/dark',
 }
 const VALLEY = { center: [77.685, 12.932], zoom: 14, pitch: 62, bearing: -18 }
-const CUSTOM_SOURCES = ['dem', 'dem-color', 'zones', 'avoid', 'route-fast', 'route-safe']
-const BELOW_LABELS = ['lowland', 'buildings-3d']
+const CUSTOM_SOURCES = ['dem', 'zones', 'avoid', 'route-fast', 'route-safe', 'road-water', 'flood-heat']
+const BELOW_LABELS = ['flood-heat', 'road-water-glow', 'road-water', 'buildings-3d']
 const ABOVE_LABELS = ['zones-fill', 'zones-line', 'avoid-fill', 'route-fast', 'route-safe-casing', 'route-safe']
 let simOn = false
 
@@ -44,6 +44,7 @@ export const viewPadding = () =>
     : { top: 64, bottom: 64, left: 64, right: 64 }
 
 export function createScene(container, onReady) {
+  simOn = false // a new map always starts in the clean view
   const map = new maplibregl.Map({
     container,
     style: STYLE.clean,
@@ -62,9 +63,53 @@ export function createScene(container, onReady) {
   map.once('style.load', () => {
     const firstLabel = map.getStyle().layers.find((l) => l.type === 'symbol')?.id
 
-    map.addSource('dem-color', demSource())
+    // Simulated flooding: a heat map (off by default) and flooded roads, drawn
+    // under labels and buildings so the city still reads on top.
+    map.addSource('flood-heat', { type: 'geojson', data: empty })
     map.addLayer(
-      { id: 'lowland', type: 'color-relief', source: 'dem-color', layout: { visibility: 'none' }, paint: { 'color-relief-opacity': 0.9 } },
+      {
+        id: 'flood-heat',
+        type: 'heatmap',
+        source: 'flood-heat',
+        layout: { visibility: 'none' },
+        paint: {
+          'heatmap-weight': ['get', 'w'],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 11, 0.6, 15, 1.4],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 11, 10, 15, 34],
+          'heatmap-opacity': 0.85,
+          'heatmap-color': [
+            'interpolate', ['linear'], ['heatmap-density'],
+            0, 'rgba(0, 0, 0, 0)',
+            0.15, 'rgba(70, 180, 255, 0.55)',
+            0.4, '#2f8fe8',
+            0.65, '#ffd166',
+            0.85, '#ff8a3d',
+            1, '#e63946',
+          ],
+        },
+      },
+      firstLabel,
+    )
+    map.addSource('road-water', { type: 'geojson', data: empty })
+    const depthColor = ['interpolate', ['linear'], ['get', 'depth'], 10, css('--flood-1'), 30, css('--flood-2'), 60, css('--flood-3'), 120, css('--flood-4')]
+    map.addLayer(
+      {
+        id: 'road-water-glow',
+        type: 'line',
+        source: 'road-water',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': depthColor, 'line-blur': 6, 'line-opacity': 0.45, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 4, 16, 22] },
+      },
+      firstLabel,
+    )
+    map.addLayer(
+      {
+        id: 'road-water',
+        type: 'line',
+        source: 'road-water',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': depthColor, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 10] },
+      },
       firstLabel,
     )
 
@@ -117,19 +162,16 @@ export function createScene(container, onReady) {
   return map
 }
 
-// Fills ground below the water line: deep in the lowest ground, fading to a
-// light edge. rise is metres above the area's lowest ground; 0 hides it.
-export function setLowland(map, base, rise) {
-  if (!map.style || !map.getLayer('lowland')) return
-  if (rise <= 0) return map.setLayoutProperty('lowland', 'visibility', 'none')
-  const level = base + rise
-  map.setPaintProperty('lowland', 'color-relief-color', [
-    'interpolate', ['linear'], ['elevation'],
-    level - 14, css('--water-deep'),
-    level - 0.4, css('--water-edge'),
-    level, 'rgba(0, 0, 0, 0)',
-  ])
-  map.setLayoutProperty('lowland', 'visibility', 'visible')
+// Draws the flooded roads and the heat map points from floodedRoads().
+export function setFloodData(map, { lines, points }) {
+  if (!map.style) return
+  map.getSource('road-water')?.setData({ type: 'FeatureCollection', features: lines })
+  map.getSource('flood-heat')?.setData({ type: 'FeatureCollection', features: points })
+}
+
+export function setHeatVisible(map, on) {
+  if (!map.style || !map.getLayer('flood-heat')) return
+  map.setLayoutProperty('flood-heat', 'visibility', on ? 'visible' : 'none')
 }
 
 export function setZonesVisible(map, visible) {
@@ -263,54 +305,4 @@ export function drawRoute(map, route) {
   const all = route.fastest ? route.safe.coords.concat(route.fastest.coords) : route.safe.coords
   const bounds = all.reduce((b, [lat, lng]) => b.extend([lng, lat]), new maplibregl.LngLatBounds())
   map.fitBounds(bounds, { padding: viewPadding(), maxZoom: 15.5, duration: 900 })
-}
-
-// Reads real elevations for the area. Returns { base, span } in metres: the
-// lowest ground and how much higher most of the area sits.
-export async function sampleElevation() {
-  const z = 12
-  const n = 2 ** z
-  const px = (lng) => ((lng + 180) / 360) * n * 256
-  const py = (lat) => ((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * n * 256
-  const [w, s, e, nn] = AREA.sample
-  const x0 = px(w), x1 = px(e), y0 = py(nn), y1 = py(s)
-  const values = []
-  try {
-    const jobs = []
-    for (let tx = Math.floor(x0 / 256); tx <= Math.floor(x1 / 256); tx++) {
-      for (let ty = Math.floor(y0 / 256); ty <= Math.floor(y1 / 256); ty++) {
-        jobs.push(
-          new Promise((resolve, reject) => {
-            const img = new Image()
-            img.crossOrigin = 'anonymous'
-            img.onload = () => {
-              const c = document.createElement('canvas')
-              c.width = c.height = 256
-              const g = c.getContext('2d', { willReadFrequently: true })
-              g.drawImage(img, 0, 0)
-              const d = g.getImageData(0, 0, 256, 256).data
-              for (let y = 0; y < 256; y += 3) {
-                for (let x = 0; x < 256; x += 3) {
-                  const gx = tx * 256 + x, gy = ty * 256 + y
-                  if (gx < x0 || gx > x1 || gy < y0 || gy > y1) continue
-                  const i = (y * 256 + x) * 4
-                  values.push(d[i] * 256 + d[i + 1] + d[i + 2] / 256 - 32768)
-                }
-              }
-              resolve()
-            }
-            img.onerror = reject
-            img.src = DEM_URL.replace('{z}', z).replace('{x}', tx).replace('{y}', ty)
-          }),
-        )
-      }
-    }
-    await Promise.all(jobs)
-    values.sort((a, b) => a - b)
-    const at = (q) => values[Math.floor(q * (values.length - 1))]
-    const base = Math.floor(at(0.01))
-    return { base, span: Math.max(6, Math.ceil(at(0.6) - base)) }
-  } catch {
-    return { base: 865, span: 30 }
-  }
 }

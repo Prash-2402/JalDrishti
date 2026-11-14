@@ -10,7 +10,7 @@ const waterLabel = (w) =>
   w <= 0 ? 'No water' : w < 0.2 ? 'Light rain' : w < 0.4 ? 'Heavy rain' : w < 0.7 ? 'Very heavy rain' : 'Extreme rain'
 
 export default function MapPanel({
-  rain, activeCount, live, onReport, showZones, onZones, water, playing, ready, onWater, onPlay, sim, onExitSim, is3D, on3D,
+  rain, activeCount, live, onReport, showZones, onZones, water, playing, ready, onWater, onPlay, sim, heat, onHeat, onExitSim, is3D, on3D,
 }) {
   return (
     <>
@@ -61,11 +61,15 @@ export default function MapPanel({
             onChange={(e) => onWater(Number(e.target.value))}
           />
           <div className="depth-key" aria-hidden="true">
-            <span>Shallow</span>
+            <span>~10 cm</span>
             <i />
-            <span>Deep</span>
+            <span>1 m+</span>
           </div>
-          <p className="hint-text">Shows where water collects first as rain gets heavier, using ground height. An illustration, not a forecast.</p>
+          <Switch label="Heat map" checked={heat} onChange={onHeat} />
+          <p className="hint-text">
+            Shows which roads flood first as rain gets heavier, worked out from ground height. Hover a blue road to see how deep it is.
+            An illustration, not a forecast.
+          </p>
           {sim && (
             <button type="button" className="link" onClick={onExitSim}>
               Back to the normal map

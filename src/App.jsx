@@ -6,12 +6,13 @@ import MapPanel from './components/MapPanel.jsx'
 import ReportForm from './components/ReportForm.jsx'
 import RoutePanel from './components/RoutePanel.jsx'
 import { floodZones } from './data/floodZones.js'
-import { reportCard, zoneCard } from './lib/cards.js'
+import { reportCard, roadCard, zoneCard } from './lib/cards.js'
+import { floodedRoads, floodSpotsAlong, loadDem } from './lib/flood.js'
 import { distM } from './lib/geo.js'
 import { reverseGeocode } from './lib/places.js'
 import { findRoute } from './lib/routing.js'
 import {
-  createScene, drawRoute, isNarrow, RAIN_WATER, sampleElevation, set3D, setAvoidZones, setSimulationView, setLowland, setZonesVisible, viewPadding,
+  createScene, drawRoute, isNarrow, RAIN_WATER, set3D, setAvoidZones, setFloodData, setHeatVisible, setSimulationView, setZonesVisible, viewPadding,
 } from './lib/scene.js'
 import { MODES, SEVERITY } from './lib/severity.js'
 import { listHistory, listReports, live, subscribe, voteReport } from './lib/store.js'
@@ -76,6 +77,8 @@ export default function App() {
   const [showZones, setShowZones] = useState(true)
   const [is3D, setIs3D] = useState(false)
   const [sim, setSim] = useState(false) // realistic 3D simulation view
+  const [heat, setHeat] = useState(false) // heat map of simulated flooding
+  const [routeWater, setRouteWater] = useState(0) // water level the current route was planned for
   const [msg, setMsg] = useState('')
   const [, setTick] = useState(0)
 
@@ -132,7 +135,7 @@ export default function App() {
 
   useEffect(() => {
     getRainAlert().then(setRain).catch(() => {})
-    sampleElevation().then(setDem)
+    loadDem().then(setDem)
   }, [])
 
   // On heavy-rain days, start with some water showing until the user changes it.
@@ -140,9 +143,48 @@ export default function App() {
     if (rain && !waterTouched.current) setWater(RAIN_WATER[rain.level] ?? 0)
   }, [rain])
 
+  // Redraw flooded roads when the water level changes or new map tiles load.
+  // Updates are spaced at least 120 ms apart so the animation stays smooth.
+  const waterRef = useRef(water)
+  const floodUpdate = useRef(null)
+  waterRef.current = water
   useEffect(() => {
-    if (map && dem) setLowland(map, dem.base, water * dem.span)
-  }, [map, dem, water])
+    if (!map || !dem) return
+    let last = 0
+    let timer
+    const update = () => {
+      last = performance.now()
+      setFloodData(map, floodedRoads(map, waterRef.current))
+    }
+    const schedule = () => {
+      clearTimeout(timer)
+      timer = setTimeout(update, Math.max(0, 120 - (performance.now() - last)))
+    }
+    const onData = (e) => e.sourceId === 'openmaptiles' && e.isSourceLoaded && schedule()
+    floodUpdate.current = schedule
+    schedule()
+    map.on('moveend', schedule)
+    map.on('sourcedata', onData)
+    return () => {
+      clearTimeout(timer)
+      map.off('moveend', schedule)
+      map.off('sourcedata', onData)
+    }
+  }, [map, dem])
+  useEffect(() => {
+    floodUpdate.current?.()
+  }, [water])
+
+  useEffect(() => {
+    if (map) setHeatVisible(map, heat)
+  }, [map, heat, sim])
+
+  // Re-plan the route once the water stops changing.
+  useEffect(() => {
+    if (playing) return
+    const t = setTimeout(() => setRouteWater(Math.round(water * 100) / 100), 500)
+    return () => clearTimeout(t)
+  }, [water, playing])
 
   // "Simulate" raises the water steadily over 8 seconds.
   useEffect(() => {
@@ -203,6 +245,46 @@ export default function App() {
     historyRef.current = history
   }, [history])
 
+  // Hover (or tap) a flooded road to see how deep the water is.
+  useEffect(() => {
+    if (!map) return
+    const hover = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: 'hover-pop', maxWidth: '240px' })
+    const roadName = (point) => {
+      const box = [[point.x - 14, point.y - 14], [point.x + 14, point.y + 14]]
+      const named = map.queryRenderedFeatures(box).find((f) => f.sourceLayer === 'transportation_name' && f.properties.name)
+      return named ? named.properties['name:en'] || named.properties.name_en || named.properties.name : null
+    }
+    const card = (e) => {
+      const f = e.features?.[0]
+      return f && roadCard(roadName(e.point), f.properties.depth, f.properties.cls)
+    }
+    const move = (e) => {
+      if (pickRef.current) return
+      const c = card(e)
+      if (!c) return
+      map.getCanvas().style.cursor = 'pointer'
+      hover.setLngLat(e.lngLat).setDOMContent(c).addTo(map)
+    }
+    const leave = () => {
+      if (!pickRef.current) map.getCanvas().style.cursor = ''
+      hover.remove()
+    }
+    const click = (e) => {
+      if (pickRef.current || !e.originalEvent || e.originalEvent.pointerType === 'mouse') return
+      const c = card(e) // touch screens have no hover: show it on tap instead
+      if (c) openPopup(e.lngLat, c)
+    }
+    map.on('mousemove', 'road-water', move)
+    map.on('mouseleave', 'road-water', leave)
+    map.on('click', 'road-water', click)
+    return () => {
+      hover.remove()
+      map.off('mousemove', 'road-water', move)
+      map.off('mouseleave', 'road-water', leave)
+      map.off('click', 'road-water', click)
+    }
+  }, [map, openPopup])
+
   // Flood-prone spot popups.
   useEffect(() => {
     if (!map) return
@@ -261,14 +343,19 @@ export default function App() {
     if (!start || !end) return setRoute(null)
     let stale = false
     setRouteBusy(true)
-    findRoute(start, end, relevant)
-      .then((r) => !stale && setRoute(r))
+    const minSeverity = MODES[mode].minSeverity
+    // Water right at the start or end cannot be routed around, so it is not counted.
+    const awayFromEnds = (s) => distM(s, start) > 150 && distM(s, end) > 150
+    const floodAlong =
+      dem && routeWater > 0 ? (line) => floodSpotsAlong(line, routeWater, minSeverity).filter(awayFromEnds) : null
+    findRoute(start, end, relevant, floodAlong)
+      .then((r) => !stale && setRoute({ ...r, simulated: Boolean(floodAlong) }))
       .catch((e) => !stale && (setRoute(null), setMsg(e.message)))
       .finally(() => !stale && setRouteBusy(false))
     return () => {
       stale = true
     }
-  }, [start?.lat, start?.lng, end?.lat, end?.lng, relevantKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [start?.lat, start?.lng, end?.lat, end?.lng, relevantKey, routeWater, mode, dem]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!map) return
@@ -380,6 +467,8 @@ export default function App() {
           setTimeout(() => setPlaying(true), 2200)
         }}
         sim={sim}
+        heat={heat}
+        onHeat={setHeat}
         onExitSim={() => {
           setPlaying(false)
           setSim(false)

@@ -25,8 +25,11 @@
 
   /* Map */
   --zone: #3d7fc2;
-  --water-deep: rgba(10, 60, 170, 0.95);
-  --water-edge: rgba(70, 180, 255, 0.7);
+  /* Simulated water on roads, shallow to deep */
+  --flood-1: #7cc8ff;
+  --flood-2: #2f8fe8;
+  --flood-3: #1450c8;
+  --flood-4: #0a2a8a;
   --route: var(--accent);
   --route-alt: #a3a39d;
   --map-building: #dedfdb;

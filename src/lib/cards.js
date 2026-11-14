@@ -47,6 +47,23 @@ export function reportCard(r, { active, nearbyCount, onVote }) {
   return box
 }
 
+const ROAD_KIND = { motorway: 'Highway', trunk: 'Main road', primary: 'Main road', secondary: 'Road', tertiary: 'Road', minor: 'Street', service: 'Lane' }
+
+// Hover card for a flooded road in the simulation.
+export function roadCard(name, depth, cls) {
+  const level = depth >= 60 ? 3 : depth >= 30 ? 2 : 1
+  const s = SEVERITY[level]
+  const box = el('div', 'pop')
+  box.append(el('b', 'pop-title', name || ROAD_KIND[cls] || 'Road'))
+  const head = el('div', 'pop-head')
+  const dot = el('span', 'sev-dot')
+  dot.style.background = s.color
+  head.append(dot, el('span', null, `~${depth} cm of water · ${s.label}`))
+  box.append(head)
+  box.append(el('p', 'pop-meta', `${s.pass} Simulated.`))
+  return box
+}
+
 export function zoneCard(zone, count) {
   const box = el('div', 'pop')
   box.append(el('b', 'pop-title', zone.name))

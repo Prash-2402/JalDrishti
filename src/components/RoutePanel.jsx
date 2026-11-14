@@ -26,6 +26,9 @@ export default function RoutePanel({ start, end, mode, onMode, route, busy, onPi
 
       {busy && <p className="muted">Finding a route…</p>}
       {route && !busy && <RouteResult route={route} />}
+      {route && !busy && !route.simulated && (
+        <p className="hint-text">Tip: run the flood simulation on the Map tab to see this route steer around flooded roads.</p>
+      )}
       {!start && !end && <p className="muted small">Set where you are starting and where you are going.</p>}
 
       {(start || end) && (
@@ -39,11 +42,15 @@ export default function RoutePanel({ start, end, mode, onMode, route, busy, onPi
 
 function RouteResult({ route }) {
   const { safe, fastest } = route
+  const what = route.simulated ? 'flooded or reported spot' : 'reported spot'
+  const n = (count) => `${count} ${what}${count === 1 ? '' : 's'}`
   let text
-  if (safe.hits) text = `No clear way around: this route still passes ${safe.hits} reported spot${safe.hits === 1 ? '' : 's'}.`
+  if (safe.hits && fastest && fastest.hits > safe.hits)
+    text = `Avoids ${fastest.hits - safe.hits} of ${n(fastest.hits)} on the fastest route (dashed), but still passes ${safe.hits}. Go slowly there.`
+  else if (safe.hits) text = `No clear way around: this route still passes ${n(safe.hits)}.`
   else if (fastest)
-    text = `Avoids ${fastest.hits} reported spot${fastest.hits === 1 ? '' : 's'} on the fastest route (dashed), ${Math.max(0, Math.round(safe.min - fastest.min))} min longer.`
-  else text = 'No reported waterlogging on this route.'
+    text = `Avoids ${n(fastest.hits)} on the fastest route (dashed), ${Math.max(0, Math.round(safe.min - fastest.min))} min longer.`
+  else text = route.simulated ? 'No flooded roads or reports on this route.' : 'No reported waterlogging on this route.'
   return (
     <div className={`result${safe.hits ? ' warn' : ''}`}>
       <div className="result-main">
