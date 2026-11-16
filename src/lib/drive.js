@@ -106,7 +106,8 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
     const target = heading(at)
     bearing = bearing == null ? target : bearing + ((((target - bearing) % 360) + 540) % 360 - 180) * Math.min(1, dt * 2.5)
     marker.setLngLat([p.lng, p.lat]).setRotation(bearing)
-    if (follow) {
+    // Skip the camera while the user is zooming, so their zoom is not cut short.
+    if (follow && !map.isZooming()) {
       const view = { center: [p.lng, p.lat], bearing }
       if (zoomTo != null) {
         zoomNow += (zoomTo - zoomNow) * Math.min(1, dt * 2)
@@ -127,14 +128,20 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
     frame = requestAnimationFrame(step)
   }
 
-  const pauseFollow = () => {
+  // The user can pan, tilt and rotate the map while driving; the camera goes
+  // back behind the vehicle 5 s after they let go. Events without an
+  // originalEvent come from the camera itself and are ignored.
+  const pauseFollow = (e) => {
+    if (!e.originalEvent) return
     follow = false
     clearTimeout(followTimer)
   }
-  const resumeFollow = () => {
+  const resumeFollow = (e) => {
+    if (!e.originalEvent) return
     clearTimeout(followTimer)
-    followTimer = setTimeout(() => (follow = true), 4000) // back behind the vehicle after a look around
+    followTimer = setTimeout(() => (follow = true), 5000)
   }
+  const USER = [['dragstart', pauseFollow], ['rotatestart', pauseFollow], ['pitchstart', pauseFollow], ['dragend', resumeFollow], ['rotateend', resumeFollow], ['pitchend', resumeFollow]]
 
   return {
     start(coords, minutes) {
@@ -142,8 +149,7 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
       const p = pointAt(0)
       marker.setLngLat([p.lng, p.lat]).addTo(map)
       map.easeTo({ center: [p.lng, p.lat], zoom: 16, pitch: 55, bearing: heading(0), duration: 1200 })
-      map.on('dragstart', pauseFollow)
-      map.on('dragend', resumeFollow)
+      for (const [type, fn] of USER) map.on(type, fn)
       if (gps && navigator.geolocation) {
         watch = navigator.geolocation.watchPosition(
           (pos) => {
@@ -208,8 +214,7 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
       cancelAnimationFrame(frame)
       clearTimeout(followTimer)
       if (watch != null) navigator.geolocation.clearWatch(watch)
-      map.off('dragstart', pauseFollow)
-      map.off('dragend', resumeFollow)
+      for (const [type, fn] of USER) map.off(type, fn)
       marker.remove()
       map.getSource('route-done')?.setData(empty)
     },

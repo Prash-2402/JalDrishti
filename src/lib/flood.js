@@ -85,7 +85,10 @@ export async function loadDem() {
   values.sort((a, b) => a - b)
   const at = (q) => values[Math.floor(q * (values.length - 1))]
   const base = Math.floor(at(0.01))
-  model = { base, span: Math.max(6, Math.ceil(at(0.6) - base)) }
+  // The full slider covers half the height of the lower 60% of the valley, so
+  // heavy rain floods the lowest roads (about 6% of the area at "Simulate")
+  // rather than most of them.
+  model = { base, span: Math.max(4, Math.ceil((at(0.6) - base) / 2)) }
   return model
 }
 

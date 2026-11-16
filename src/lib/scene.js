@@ -14,7 +14,7 @@ export const AREA = {
 }
 
 // Water level for each forecast alert, as a share of the simulation slider.
-export const RAIN_WATER = { Green: 0, Yellow: 0, Orange: 0.15, Red: 0.3 }
+export const RAIN_WATER = { Green: 0, Yellow: 0, Orange: 0.3, Red: 0.5 }
 
 // The everyday map is light and quiet; the flood simulation switches to a dark,
 // tilted 3D city where buildings and water depth read clearly.
