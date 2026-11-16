@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import { Droplet, History, Map as MapIcon, Route as RouteIcon, X, Zap } from 'lucide-react'
+import { History, Map as MapIcon, Route as RouteIcon, X, Zap } from 'lucide-react'
 import ActivityPanel from './components/ActivityPanel.jsx'
 import DemoMenu from './components/DemoMenu.jsx'
 import DriveHud from './components/DriveHud.jsx'
@@ -1095,9 +1095,7 @@ export default function App() {
   return (
     <div className={`app${driveInfo ? ' driving' : ''}`}>
       <nav className="rail" aria-label="Sections">
-        <span className="logo" aria-hidden="true">
-          <Droplet size={20} />
-        </span>
+        <img className="logo" src="/logo.png" alt="Jaldrishti" />
         {TABS.map((tb) => (
           <button
             type="button"

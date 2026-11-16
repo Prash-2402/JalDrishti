@@ -82,15 +82,15 @@ Without migration 003, alerts still reach other open devices but are not stored.
 
 `.npmrc` points npm at a mirror of the npm registry because some networks block the main one. Delete it if `npm install` works without it.
 
-## Grok route summary (optional)
+## AI route summary with Groq (optional)
 
-When a drive starts, the app speaks a short summary. Out of the box it writes this itself. To have Grok (xAI) write it, with the first turns and road names:
+When a drive starts, the app speaks a short summary. Out of the box it writes this itself. To have an AI model on Groq write it, with the first turns and road names:
 
-1. In Supabase: **Edge Functions → Secrets**, add `XAI_API_KEY` (your xAI key). Optional: `XAI_MODEL` (default `grok-3-mini`).
+1. In Supabase: **Edge Functions → Secrets**, add `GROQ_API_KEY` (your Groq key, starts with `gsk_`). Optional: `GROQ_MODEL` (default `llama-3.3-70b-versatile`).
 2. Deploy the function in `supabase/functions/guide` (`supabase functions deploy guide`, or create a function named `guide` in the dashboard and paste the file).
-3. Set `VITE_GROK_GUIDE=on` in `.env` and in Vercel's environment variables, then redeploy.
+3. Set `VITE_GROQ_GUIDE=on` in `.env` and in Vercel's environment variables, then redeploy.
 
-The key stays on the server; it is never put in the app. Turn-by-turn directions come from OpenRouteService and work without Grok.
+The key stays on the server; it is never put in the app. Turn-by-turn directions come from OpenRouteService and work without it.
 
 ## Real sensors
 
