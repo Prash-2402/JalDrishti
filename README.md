@@ -2,11 +2,18 @@
 
 Flood alerts and safer routes for Bellandur and the Outer Ring Road, Bengaluru. Built for the IEEE GeoAI Hackathon 2026, Theme 05: Flood Alert and Mapping System.
 
+## Two modes
+
+- **Live** (default): only what is real. Citizen reports, real sensor alerts, the rain forecast, and flood-prone spots with their **past flood records** (dated, with the news source). Route gives turn-by-turn **navigation** with your GPS.
+- **Simulation**: practice scenarios, clearly marked as not real. A dark 3D city where water rises on roads, the Demo menu (replay, raise water, place an electricity fault), and animated drives. Simulated alerts never appear in Live.
+
+Switch at the top of the Map tab.
+
 ## What it does
 
 **Map**
 - Live citizen reports of waterlogging, shown as coloured dots by depth.
-- Known flood-prone spots, and water-level sensors (simulated for now).
+- Known flood-prone spots with past flood records (for example 5 Sep 2022 at Bellandur ORR and Rainbow Drive, 19 May 2025 at Silk Board and Sai Layout), and water-level sensors (simulated for now).
 - Today's rain forecast (Open-Meteo).
 - English and Kannada, switched from the top of the Map tab. Map labels switch too.
 
@@ -94,7 +101,8 @@ React, Vite, MapLibre GL, OpenFreeMap tiles, Supabase (database, realtime, photo
 | `src/lib/alerts.js` | Sensors and alerts, shared in real time |
 | `src/lib/store.js` | Reports and saved trips |
 | `src/lib/i18n.js` | English and Kannada text |
-| `src/theme.css` | All colours, in one place |
+| `src/theme.css` | All colours: clotted cream 60%, navy 30%, heirloom tomato 10% |
+| `src/data/floodZones.js` | Flood-prone spots and dated past flood records with sources |
 | `scripts/seed-demo.mjs` | Demo data and the Sept 2022 replay |
 | `supabase/` | Database setup, migrations, sensor ingest function |
 | `docs/bengaluru-deployment.md` | Sensors and a pilot on real roads |

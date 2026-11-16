@@ -1,39 +1,48 @@
-/* All colours live here. Swap these values to re-theme the app;
-   the map reads them too when it loads. */
+/* All colours live here. The map reads them too when it loads.
+   60% clotted cream (backgrounds), 30% navy (text, rail, structure),
+   10% heirloom tomato (the main action and live highlights). */
 :root {
   --font: 'Inter Variable', 'Noto Sans Kannada Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 
-  /* Surfaces and text */
-  --bg: #f5f5f3;
-  --surface: #ffffff;
-  --surface-2: #f1f1ee;
-  --border: #e3e3df;
-  --text: #1b1b19;
-  --text-2: #5c5c57;
-  --text-3: #8a8a84;
+  /* Clotted cream: surfaces */
+  --bg: #f4ead3;
+  --surface: #fbf6ea;
+  --surface-2: #efe3c7;
+  --border: #e0d2b2;
 
-  /* Primary action (buttons, active tab, the safer route) */
-  --accent: #1b1b19;
-  --accent-text: #ffffff;
-  --focus: #2f6fed;
+  /* Navy: text and structure */
+  --navy: #1b2a4a;
+  --navy-2: #2a3d66;
+  --text: #1b2a4a;
+  --text-2: #4b5876;
+  --text-3: #858b9c;
+  --accent: var(--navy);
+  --accent-text: #fbf6ea;
+
+  /* Heirloom tomato: the one thing to press, and what is live */
+  --hot: #d2462b;
+  --hot-text: #fff8ec;
+  --focus: #d2462b;
 
   /* Meaning: keep these recognisable whatever the theme */
   --sev-1: #d9a31a; /* ankle-deep */
-  --sev-2: #e06c1f; /* knee-deep */
-  --sev-3: #cf3a3a; /* waist-deep */
-  --ok: #2f8a57;
+  --sev-2: #e07b24; /* knee-deep */
+  --sev-3: #b3261e; /* waist-deep */
+  --ok: #2f7a55;
 
   /* Map */
-  --zone: #3d7fc2;
+  --map-land: #efe6d2;
+  --zone: #2a3d66;
   /* Simulated water on roads, shallow to deep */
   --flood-1: #7cc8ff;
   --flood-2: #2f8fe8;
   --flood-3: #1450c8;
   --flood-4: #0a2a8a;
-  --route: var(--accent);
-  --route-alt: #a3a39d;
-  --map-building: #dedfdb;
+  --route: var(--navy);
+  --route-alt: #9a9fae;
+  --map-building: #e3d8bf;
 
-  --radius: 10px;
-  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-sm: 9px;
+  --shadow: 0 6px 20px rgba(27, 42, 74, 0.12);
 }

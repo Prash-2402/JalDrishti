@@ -160,7 +160,7 @@ export function createScene(container, onReady) {
     map.addSource('route-safe', { type: 'geojson', data: empty })
     const round = { 'line-cap': 'round', 'line-join': 'round' }
     map.addLayer({ id: 'route-fast', type: 'line', source: 'route-fast', layout: round, paint: { 'line-color': css('--route-alt'), 'line-width': 4, 'line-dasharray': [1, 1.5] } })
-    map.addLayer({ id: 'route-safe-casing', type: 'line', source: 'route-safe', layout: round, paint: { 'line-color': '#ffffff', 'line-width': 9 } })
+    map.addLayer({ id: 'route-safe-casing', type: 'line', source: 'route-safe', layout: round, paint: { 'line-color': css('--surface'), 'line-width': 9 } })
     map.addLayer({ id: 'route-safe', type: 'line', source: 'route-safe', layout: round, paint: { 'line-color': css('--route'), 'line-width': 5 } })
     // Wet stretches on the chosen route, and the part already driven.
     map.addSource('route-wet', { type: 'geojson', data: empty })
@@ -180,7 +180,10 @@ export function createScene(container, onReady) {
     onReady(map)
   })
 
-  map.once('style.load', () => setMapLang(map, getLang()))
+  map.once('style.load', () => {
+    setMapLang(map, getLang())
+    applyLook(map, false)
+  })
   return map
 }
 
@@ -217,14 +220,15 @@ function aimAtGround(map, target) {
   }, 300)
 }
 
-const routeColor = () => (simOn ? '#3ddc84' : css('--route'))
+const routeColor = () => (simOn ? css('--surface') : css('--route'))
 
 // Colours that differ between the clean map and the simulation.
 function applyLook(map, sim) {
   const paint = (id, prop, value) => map.getLayer(id) && map.setPaintProperty(id, prop, value)
+  if (!sim) paint('background', 'background-color', css('--map-land'))
   if (sim) {
-    paint('background', 'background-color', '#070b12')
-    paint('water', 'fill-color', '#0d2a4a')
+    paint('background', 'background-color', '#0b1730')
+    paint('water', 'fill-color', '#13284d')
     paint('highway_motorway_inner', 'line-color', '#ffb454')
     paint('highway_major_inner', 'line-color', '#8a9bb5')
     paint('highway_minor', 'line-color', '#3b475a')
@@ -234,14 +238,14 @@ function applyLook(map, sim) {
     'buildings-3d',
     'fill-extrusion-color',
     sim
-      ? ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 6], 0, '#1b2433', 20, '#2b3a52', 60, '#4a6387']
+      ? ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 6], 0, '#1b2a4a', 20, '#2a3d66', 60, '#46608f']
       : css('--map-building'),
   )
   paint('buildings-3d', 'fill-extrusion-opacity', sim ? 0.92 : 0.85)
   paint('zones-fill', 'fill-color', sim ? '#4cc9ff' : css('--zone'))
   paint('zones-line', 'line-color', sim ? '#4cc9ff' : css('--zone'))
   paint('route-safe', 'line-color', routeColor())
-  paint('route-safe-casing', 'line-color', sim ? '#070b12' : '#ffffff')
+  paint('route-safe-casing', 'line-color', sim ? '#0b1730' : css('--surface'))
 }
 
 export function set3D(map, on) {

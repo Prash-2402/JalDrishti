@@ -245,7 +245,6 @@ export default function App() {
   // A change in the rain level is kept for the activity log.
   useEffect(() => {
     if (!rain) return
-    if (!waterTouched.current) setWater(RAIN_WATER[rain.level] ?? 0)
     try {
       const prev = JSON.parse(localStorage.getItem(RAIN_KEY))
       const next = prev?.level === rain.level ? prev : { level: rain.level, at: new Date().toISOString(), changed: Boolean(prev) }
@@ -468,7 +467,8 @@ export default function App() {
   })
 
   // Alerts: drawn on the map, on the sensors, and announced when new.
-  const activeAlerts = useMemo(() => alerts.filter((a) => isActiveAlert(a)), [alerts])
+  const shownAlerts = useMemo(() => (sim ? alerts : alerts.filter((a) => !a.is_simulated)), [alerts, sim])
+  const activeAlerts = useMemo(() => shownAlerts.filter((a) => isActiveAlert(a)), [shownAlerts])
   useEffect(() => {
     if (map) setAlerts(map, activeAlerts)
   }, [map, activeAlerts])
@@ -500,7 +500,7 @@ export default function App() {
           water: s.wet,
           wire: s.wire,
           cm: s.wire?.cm || s.wet?.cm || waterAtRef.current?.(s) || 0,
-          onWire: () => {
+          onWire: !sim ? null : () => {
             popupRef.current?.remove()
             const cm = s.wet?.cm || waterAtRef.current?.(s) || 0
             sendAlert({ kind: 'wire', lat: s.lat, lng: s.lng, cm, place: s.name, sensorId: s.id }).catch((err) => setMsg(err.message))
@@ -526,9 +526,9 @@ export default function App() {
         } else setAlarm({ tone: 'water', text: t('bn.water', { place: a.place || t('road.road'), cm: Math.round(a.cm) }), alertId: a.id, auto: 6000 })
       }
     }
-    seenRef.current = new Set(alerts.map((a) => a.id))
+    seenRef.current = new Set(shownAlerts.map((a) => a.id))
     setAlarm((b) => (b && !activeAlerts.some((a) => a.id === b.alertId) ? null : b))
-  }, [alerts, activeAlerts])
+  }, [shownAlerts, activeAlerts])
 
   useEffect(() => {
     if (!banner?.auto) return
@@ -565,7 +565,7 @@ export default function App() {
     if (!start || !end) return setRoute(null)
     let stale = false
     setRouteBusy(true)
-    const w = dem ? routeWater : 0
+    const w = dem && sim ? routeWater : 0
     findRoute(start, end, { hazards: planRef.current, water: w, mode: MODES[mode] })
       .then((r) => !stale && setRoute({ ...r, simulated: w > 0 }))
       .catch((e) => !stale && (setRoute(null), setMsg(e.message)))
@@ -573,7 +573,7 @@ export default function App() {
     return () => {
       stale = true
     }
-  }, [start?.lat, start?.lng, end?.lat, end?.lng, hazardKey, routeWater, mode, dem, routeNonce]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [start?.lat, start?.lng, end?.lat, end?.lng, hazardKey, routeWater, mode, dem, routeNonce, sim]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!map) return
@@ -631,7 +631,7 @@ export default function App() {
     const originAt = blockAt != null ? d.at + Math.max(0, Math.min(300, blockAt - d.at - 250)) : d.at
     const o = d.pointAt(originAt)
     const w = waterRef.current
-    const hz = buildHazards(reportsRef.current, alerts, true)
+    const hz = buildHazards(reportsRef.current, shownAlerts, true)
     try {
       const r = await findRoute({ lat: o.lat, lng: o.lng }, end, { hazards: hz, water: w, mode: modeCfg })
       if (driveRef.current !== d) return
@@ -682,7 +682,7 @@ export default function App() {
     const d = driveRef.current
     if (!d) return
     const st = rerouteRef.current
-    const prof = profile(d.slice(at, at + LOOK_M), buildHazards(reportsRef.current, alerts), waterRef.current, modeCfg.avoidCm, [end])
+    const prof = profile(d.slice(at, at + LOOK_M), buildHazards(reportsRef.current, shownAlerts), waterRef.current, modeCfg.avoidCm, [end])
     d.setSlow(prof.spots.map((s) => [at + s.at - 15, at + s.end + 25]))
     const inWater = prof.spots.find((s) => s.at <= 5)
     const spot = prof.spots.find((s) => s.at > 40) // water under the vehicle cannot be avoided any more
@@ -762,12 +762,12 @@ export default function App() {
   const waterAt = (p) => {
     const cm = depthAt(p.lng, p.lat, waterRef.current)
     if (cm >= 10) return cm
-    const h = buildHazards(reportsRef.current, alerts).find((x) => !x.hard && x.cm >= 10 && distM(x, p) < x.radius)
+    const h = buildHazards(reportsRef.current, shownAlerts).find((x) => !x.hard && x.cm >= 10 && distM(x, p) < x.radius)
     return h ? h.cm : 0
   }
   waterAtRef.current = waterAt
   const startPlacing = () => {
-    const anyWater = waterRef.current > 0 || buildHazards(reportsRef.current, alerts).some((h) => !h.hard && h.cm >= 10)
+    const anyWater = waterRef.current > 0 || buildHazards(reportsRef.current, shownAlerts).some((h) => !h.hard && h.cm >= 10)
     if (!anyWater) return setMsg(t('place.none'))
     popupRef.current?.remove()
     setPlaceErr(false)
@@ -802,6 +802,18 @@ export default function App() {
     if (sim || !map) return
     setSim(true)
     setSimulationView(map, true, is3D)
+    if (!waterTouched.current && rain) setWater(RAIN_WATER[rain.level] ?? 0) // start from today's forecast
+  }
+  // Live shows only what is real: reports, real sensor alerts and past floods.
+  const exitSim = () => {
+    if (driveRef.current) stopDrive()
+    setPlaying(false)
+    setReplay(null)
+    setPlacing(false)
+    setSim(false)
+    setWater(0)
+    waterTouched.current = false
+    if (map) setSimulationView(map, false, is3D)
   }
   const startReplay = async () => {
     const data = (await import('./data/sept2022.json')).default
@@ -921,6 +933,7 @@ export default function App() {
         }}
         onDrive={startDrive}
         driving={Boolean(driveInfo)}
+        simMode={sim}
         trips={trips}
         tripStatus={tripStatus}
         onTrip={(trip) => {
@@ -940,7 +953,7 @@ export default function App() {
     panel = (
       <ActivityPanel
         history={history}
-        alerts={alerts}
+        alerts={shownAlerts}
         rainEvent={rainEvent}
         activeIds={new Set(reports.map((r) => r.id))}
         zones={zones}
@@ -991,13 +1004,8 @@ export default function App() {
         sim={sim}
         heat={heat}
         onHeat={setHeat}
-        onExitSim={() => {
-          setPlaying(false)
-          setReplay(null)
-          setSim(false)
-          setWater(0)
-          if (map) setSimulationView(map, false, is3D)
-        }}
+        onExitSim={exitSim}
+        onEnterSim={enterSim}
         is3D={is3D}
         on3D={(on) => {
           setIs3D(on)
@@ -1036,11 +1044,15 @@ export default function App() {
         ))}
       </nav>
 
-      <section className="panel">{panel}</section>
+      <section className="panel">
+        <div key={reporting ? 'report' : tab} className="panel-in">
+          {panel}
+        </div>
+      </section>
 
       <main className="map-wrap">
         <div ref={boxRef} className="map" />
-        <DemoMenu driving={Boolean(driveInfo)} onReplay={startReplay} onRaise={raiseWater} onPlace={startPlacing} onClear={() => clearDemoAlerts(alerts).catch((e) => setMsg(e.message))} />
+        {sim && <DemoMenu driving={Boolean(driveInfo)} onReplay={startReplay} onRaise={raiseWater} onPlace={startPlacing} onClear={() => clearDemoAlerts(alerts).catch((e) => setMsg(e.message))} />}
         <div className="map-top">
           {[alarm, banner].map(
             (b, i) =>

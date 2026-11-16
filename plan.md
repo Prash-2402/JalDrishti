@@ -13,6 +13,8 @@ What is built, and what comes next.
 - **Saved trips**: up to five trips in the Route tab, each with a live status line, and a notification when danger lands on one while the app is in the background.
 - **Demo data**: `scripts/seed-demo.mjs` generates reports from real hourly rainfall (Open-Meteo archive). In-app "Replay Sept 2022" plays the Aug–Sept 2022 floods in 60 seconds.
 - **Kannada**: the whole app, alerts and map labels switch between English and Kannada.
+- **Live and Simulation modes**: Live shows only real data (reports, real sensor alerts, past flood records) and uses GPS navigation; Simulation holds every practice scenario and is marked as not real.
+- **Past flood records**: dated floods with sources at nine spots (Sept 2022, Oct 2024, May 2025).
 - **Flood simulation**: water on roads by ground height, depth on hover, heat map. Changing the water level costs about 1 ms; roads are re-sampled at most once a second while the map moves.
 
 ## Next
@@ -46,7 +48,7 @@ What is built, and what comes next.
 ## Known limitations
 
 - The flood simulation is an illustration from ground height (about 20 m detail), not a forecast.
-- Flood-prone spots, sensor sites and low-lying road points are approximate placeholders, not the official BBMP list.
+- Flood-prone spot locations are approximate; past flood records come from news reports, not the official BBMP list. Sensor sites and low-lying road points are placeholders.
 - The rainfall archive is a ~10 km average and smooths out local cloudbursts, so the demo data scales rain against each period's own peak. Replay shows the archive's real mm values.
 - Without migration 003, alerts still reach other open devices through a realtime channel, but they are not stored and disappear on reload.
 - Kannada text needs a review by a fluent speaker.

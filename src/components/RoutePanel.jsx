@@ -7,7 +7,7 @@ const ICONS = { bike: <Bike size={16} />, car: <Car size={16} /> }
 const TONE = { danger: 'var(--sev-3)', warn: 'var(--sev-2)', ok: 'var(--ok)' }
 
 export default function RoutePanel({
-  start, end, mode, onMode, route, busy, onPick, onGps, onClear, onDrive, driving, trips, tripStatus, onTrip, onRemoveTrip, onSave,
+  start, end, mode, onMode, route, busy, onPick, onGps, onClear, onDrive, driving, simMode, trips, tripStatus, onTrip, onRemoveTrip, onSave,
 }) {
   const [naming, setNaming] = useState(null) // trip name being typed, or null
   const short = (p) => p?.name?.split(',')[0] || ''
@@ -75,15 +75,12 @@ export default function RoutePanel({
           )}
           {!driving && (
             <>
-              <button type="button" className="btn btn-primary btn-block" disabled={route.status === 'wire'} onClick={() => onDrive(false)}>
-                <Navigation size={16} /> {t('rt.drive')}
-              </button>
-              <button type="button" className="link" disabled={route.status === 'wire'} onClick={() => onDrive(true)}>
-                {t('rt.gps')}
+              <button type="button" className="btn btn-hot btn-block" disabled={route.status === 'wire'} onClick={() => onDrive(!simMode)}>
+                <Navigation size={16} /> {simMode ? t('rt.drive') : t('rt.nav')}
               </button>
             </>
           )}
-          {!route.simulated && <p className="hint-text">{t('rt.tip')}</p>}
+          {simMode && !route.simulated && <p className="hint-text">{t('rt.tip')}</p>}
         </>
       )}
       {!start && !end && <p className="muted small">{t('rt.empty')}</p>}

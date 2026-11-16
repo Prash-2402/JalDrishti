@@ -1,7 +1,7 @@
 // Popup contents for the map. Built as plain DOM because map popups live
 // outside React.
 import { ago, until } from './format.js'
-import { t } from './i18n.js'
+import { getLang, t } from './i18n.js'
 import { levelFor, sev } from './severity.js'
 
 const el = (tag, className, text) => {
@@ -61,11 +61,27 @@ export function roadCard(name, depth, cls) {
   return box
 }
 
+const floodDate = (d) =>
+  new Date(d.length === 7 ? `${d}-01` : d).toLocaleDateString(getLang() === 'kn' ? 'kn-IN' : 'en-IN', {
+    day: d.length === 7 ? undefined : 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+
 export function zoneCard(zone, count) {
   const box = el('div', 'pop')
   box.append(el('b', 'pop-title', zone.name))
   box.append(el('p', 'pop-text', t('zone.known')))
   box.append(el('p', 'pop-meta', t('zone.count', count)))
+  const list = el('ul', 'pop-floods')
+  list.append(el('li', null, t('zone.past')))
+  for (const f of zone.floods || []) {
+    const row = el('li')
+    row.append(el('b', null, floodDate(f.date)), el('span', null, `${f.what} · ${f.source}`))
+    list.append(row)
+  }
+  if (!zone.floods?.length) list.append(el('li', null, t('zone.none')))
+  box.append(list)
   return box
 }
 
@@ -80,7 +96,7 @@ export function sensorCard(sensor, { water, wire, cm, onWire, onSafe }) {
   box.append(el('p', 'pop-meta', last ? `${t('sensor.sim')} · ${ago(last.created_at)}` : t('sensor.sim')))
   // Electricity is only a danger where there is floodwater.
   if (wire) box.append(actions([[t('sensor.safe'), onSafe]]))
-  else if (cm >= 10) box.append(actions([[t('sensor.wire'), onWire]]))
-  else box.append(el('p', 'pop-meta', t('sensor.needWater')))
+  else if (cm >= 10 && onWire) box.append(actions([[t('sensor.wire'), onWire]]))
+  else if (onWire) box.append(el('p', 'pop-meta', t('sensor.needWater')))
   return box
 }

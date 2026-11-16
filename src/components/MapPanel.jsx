@@ -7,8 +7,10 @@ import { Segmented, Switch } from './ui.jsx'
 const RAIN_DOT = { Green: 'var(--ok)', Yellow: 'var(--sev-1)', Orange: 'var(--sev-2)', Red: 'var(--sev-3)' }
 const waterStep = (w) => (w <= 0 ? 0 : w < 0.2 ? 1 : w < 0.4 ? 2 : w < 0.7 ? 3 : 4)
 
+// Live: what is real right now. Simulation: practice scenarios, clearly apart.
 export default function MapPanel({
-  rain, activeCount, hourCount, live, onReport, showZones, onZones, water, playing, ready, onWater, onPlay, sim, heat, onHeat, onExitSim, is3D, on3D, onLang,
+  rain, activeCount, hourCount, live, onReport, showZones, onZones, water, playing, ready, onWater, onPlay,
+  sim, heat, onHeat, onExitSim, onEnterSim, is3D, on3D, onLang,
 }) {
   return (
     <>
@@ -28,31 +30,47 @@ export default function MapPanel({
         />
       </header>
 
-      {rain && (
-        <div className="rain">
-          <span className="sev-dot" style={{ background: RAIN_DOT[rain.level] }} />
-          <div>
-            <b>{t(`rain.${rain.level}`)}</b>
-            <p>{t('rain.mm', rain.mm)}</p>
-          </div>
-        </div>
+      <div className="modes">
+        <Segmented
+          label={t('view.live')}
+          value={sim ? 'sim' : 'live'}
+          onChange={(v) => (v === 'sim' ? onEnterSim() : onExitSim())}
+          options={[
+            { value: 'live', label: t('view.live'), icon: !sim && <span className="live-dot" /> },
+            { value: 'sim', label: t('view.sim') },
+          ]}
+        />
+        <p className="hint-text">{sim ? t('view.simHint') : t('view.liveHint')}</p>
+      </div>
+
+      {!sim && (
+        <>
+          {rain && (
+            <div className="rain">
+              <span className="sev-dot" style={{ background: RAIN_DOT[rain.level] }} />
+              <div>
+                <b>{t(`rain.${rain.level}`)}</b>
+                <p>{t('rain.mm', rain.mm)}</p>
+              </div>
+            </div>
+          )}
+          <button type="button" className="btn btn-hot btn-block" onClick={onReport}>
+            <Plus size={18} /> {t('report.cta')}
+          </button>
+          <p className="small muted">
+            {t('counts', { active: activeCount, hour: hourCount })} · {live ? t('live') : t('demoMode')}
+          </p>
+        </>
       )}
 
-      <button type="button" className="btn btn-primary btn-block" onClick={onReport}>
-        <Plus size={18} /> {t('report.cta')}
-      </button>
-      <p className="small muted">
-        {t('counts', { active: activeCount, hour: hourCount })} · {live ? t('live') : t('demoMode')}
-      </p>
-
-      {ready && (
+      {sim && ready && (
         <section className="sim">
           <div className="sim-head">
             <div>
               <b>{t('sim.title')}</b>
               <p>{t(`water.${waterStep(water)}`)}</p>
             </div>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={onPlay}>
+            <button type="button" className="btn btn-hot btn-sm" onClick={onPlay}>
               {playing ? <Pause size={14} /> : <Play size={14} />}
               {playing ? t('sim.pause') : t('sim.play')}
             </button>
@@ -74,11 +92,6 @@ export default function MapPanel({
           </div>
           <Switch label={t('sim.heat')} checked={heat} onChange={onHeat} />
           <p className="hint-text">{t('sim.hint')}</p>
-          {sim && (
-            <button type="button" className="link" onClick={onExitSim}>
-              {t('sim.exit')}
-            </button>
-          )}
         </section>
       )}
 
