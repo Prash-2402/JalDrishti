@@ -26,7 +26,9 @@ function ask(facts) {
     body: JSON.stringify({
       model,
       temperature: 0.3,
-      max_tokens: 300,
+      max_tokens: 800,
+      // Reasoning models (gpt-oss) think before answering: keep it short and hidden.
+      ...(/gpt-oss/.test(model) && { reasoning_effort: 'low', include_reasoning: false }),
       messages: [
         {
           role: 'system',
