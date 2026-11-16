@@ -265,8 +265,9 @@ export default function App() {
     let pieces = []
     let dirty = true
     let sampledAt = 0
-    let timer
+    let timer = 0
     const draw = () => {
+      timer = 0
       if (waterRef.current > 0 && dirty) {
         pieces = sampleRoads(map)
         dirty = false
@@ -274,9 +275,10 @@ export default function App() {
       }
       setFloodData(map, floodLines(pieces, waterRef.current))
     }
+    // Throttle, not debounce: while the water rises every frame, a redraw is
+    // already waiting, so it still happens every 40 ms instead of only at the end.
     const schedule = (wait = 0) => {
-      clearTimeout(timer)
-      timer = setTimeout(draw, wait)
+      if (!timer) timer = setTimeout(draw, wait)
     }
     const onChange = () => {
       dirty = true
