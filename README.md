@@ -57,7 +57,7 @@ A good two-minute demo: save a Home → Office trip, start the drive, raise wate
 
 ## How the flood simulation works
 
-The app loads ground height for the area from public terrain data. The slider raises a water line above the lowest ground; any road below that line floods, and the deeper below the line, the deeper the water. This shows which roads flood first, but it is an **illustration, not a forecast**: it ignores drains, and the terrain data is only about 20 m detailed. `plan.md` describes replacing it with a model learned from real reports and rainfall.
+The app loads ground height for the area from public terrain data. Like real waterlogging, the simulated water is patchy: a road floods only where it sits in a dip (lower than the average ground within about 150 m) deeper than its drains can clear. Drain capacity varies from stretch to stretch, heavier rain fills more of each dip and overwhelms more drains, and the low parts of the valley pond most. At "Simulate" about 13% of the valley is wet, in patches averaging about 65 m. It is an **illustration, not a forecast**: the terrain data is only about 20 m detailed and real drains are not mapped. `plan.md` describes replacing it with a model learned from real reports and rainfall.
 
 ## Run it
 
