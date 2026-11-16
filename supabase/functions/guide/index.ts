@@ -35,7 +35,8 @@ function ask(facts) {
           content:
             `You are a calm navigation voice for flood-hit Bengaluru roads. In ${language}, in at most two short sentences ` +
             '(under 40 words), summarise the drive: distance and time, the first one or two turns with road names, and any water ' +
-            '(depth in cm) or electrical danger. Water depths are simulated or reported, never certain. No emojis, no lists.',
+            '(depth in cm). Mention electrical danger only if status is "wire"; if maxWaterCm is 0 say the road is clear. ' +
+            'Use only the facts given. Water depths are simulated or reported, never certain. No emojis, no lists.',
         },
         { role: 'user', content: JSON.stringify(facts).slice(0, 2000) },
       ],
