@@ -8,6 +8,7 @@ import maplibregl from 'maplibre-gl'
 import { distM } from './geo.js'
 
 const empty = { type: 'FeatureCollection', features: [] }
+const SLOW = 0.33 // share of full speed while driving through water
 
 export function createDrive(map, { onTick, onEnd, gps = false }) {
   const el = document.createElement('div')
@@ -31,6 +32,10 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
   let watch = null
   let ended = false
   let stopped = false
+  let slow = [] // [from, to] distances along the route that are under water
+  let factor = 1 // current share of full speed, eased towards the target
+  let zoomTo = null // camera zoom to ease towards, or null to leave it alone
+  let zoomNow = 0
 
   function pointAt(d) {
     d = Math.max(0, Math.min(total, d))
@@ -91,16 +96,29 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
   function step(now) {
     const dt = Math.min(0.1, (now - last) / 1000)
     last = now
-    if (!gps && !paused) at = Math.min(total, stopAt, at + mps * speed * dt)
+    // Through water at a third of the speed, easing in and out; ease to a halt before stopAt.
+    const wet = slow.some(([a, b]) => at >= a && at <= b)
+    factor += ((wet ? SLOW : 1) - factor) * Math.min(1, dt * 3)
+    let v = mps * speed * factor
+    if (stopAt < Infinity) v *= Math.max(0.04, Math.min(1, (stopAt - at) / Math.max(40, mps * speed * 1.2)))
+    if (!gps && !paused) at = Math.min(total, stopAt, at + v * dt)
     const p = pointAt(at)
     const target = heading(at)
     bearing = bearing == null ? target : bearing + ((((target - bearing) % 360) + 540) % 360 - 180) * Math.min(1, dt * 2.5)
     marker.setLngLat([p.lng, p.lat]).setRotation(bearing)
-    if (follow) map.jumpTo({ center: [p.lng, p.lat], bearing })
+    if (follow) {
+      const view = { center: [p.lng, p.lat], bearing }
+      if (zoomTo != null) {
+        zoomNow += (zoomTo - zoomNow) * Math.min(1, dt * 2)
+        view.zoom = zoomNow
+        if (Math.abs(zoomTo - zoomNow) < 0.01) zoomTo = null
+      }
+      map.jumpTo(view)
+    }
     if (now - lastTick > 250) {
       lastTick = now
       map.getSource('route-done')?.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: slice(0, at).map(([la, ln]) => [ln, la]) } })
-      onTick?.({ at, total, leftM: total - at, leftMin: (total - at) / mps / 60, offRoute: offRoute > 2 })
+      onTick?.({ at, total, leftM: total - at, leftMin: (total - at) / mps / 60, offRoute: offRoute > 2, wet })
     }
     if (at >= total - 5 && !ended) {
       ended = true
@@ -149,12 +167,21 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
       setLine(coords)
       mps = keep
       offRoute = 0
+      slow = []
     },
     stopBefore(d) {
       stopAt = Math.max(at, d)
     },
     release() {
       stopAt = Infinity
+    },
+    // Stretches of the route under water, as [from, to] distances along it.
+    setSlow(ranges) {
+      slow = ranges
+    },
+    setZoom(z) {
+      zoomNow = map.getZoom()
+      zoomTo = z
     },
     setSpeed(x) {
       speed = x

@@ -55,7 +55,7 @@ async function rpc(name, args) {
 // A sensor alert goes through the same path a real sensor reading would.
 export async function sendAlert({ kind, lat, lng, cm = 0, place, sensorId = null }) {
   const stored = sensorId
-    ? await rpc('simulate_reading', { sensor: sensorId, water_cm: kind === 'wire' ? 40 : cm, volts: kind === 'wire' ? 230 : 0 })
+    ? await rpc('simulate_reading', { sensor: sensorId, water_cm: kind === 'wire' ? Math.max(cm, 10) : cm, volts: kind === 'wire' ? 230 : 0 })
     : await rpc('simulate_alert', { kind, lat, lng, cm, place })
   if (stored) return
   const now = Date.now()

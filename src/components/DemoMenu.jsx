@@ -3,7 +3,7 @@ import { FlaskConical } from 'lucide-react'
 import { t } from '../lib/i18n.js'
 
 // The one extra button on the map: demo triggers for judging and testing.
-export default function DemoMenu({ driving, onReplay, onRaise, onWire, onClear }) {
+export default function DemoMenu({ driving, onReplay, onRaise, onPlace, onClear }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   useEffect(() => {
@@ -35,7 +35,7 @@ export default function DemoMenu({ driving, onReplay, onRaise, onWire, onClear }
         <div className="demo-menu" role="menu">
           {item(t('demo.replay'), onReplay)}
           {item(t('demo.raise'), onRaise, !driving, t('demo.needDrive'))}
-          {item(t('demo.wire'), onWire)}
+          {item(t('demo.place'), onPlace)}
           {item(t('demo.clear'), onClear)}
         </div>
       )}

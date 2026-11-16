@@ -75,10 +75,10 @@ export default function RoutePanel({
           )}
           {!driving && (
             <>
-              <button type="button" className="btn btn-primary btn-block" onClick={() => onDrive(false)}>
+              <button type="button" className="btn btn-primary btn-block" disabled={route.status === 'wire'} onClick={() => onDrive(false)}>
                 <Navigation size={16} /> {t('rt.drive')}
               </button>
-              <button type="button" className="link" onClick={() => onDrive(true)}>
+              <button type="button" className="link" disabled={route.status === 'wire'} onClick={() => onDrive(true)}>
                 {t('rt.gps')}
               </button>
             </>

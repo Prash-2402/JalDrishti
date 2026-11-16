@@ -78,6 +78,9 @@ export function sensorCard(sensor, { water, wire, cm, onWire, onSafe }) {
   box.append(head(wire ? 'var(--sev-3)' : 'var(--ok)', el('span', null, wire ? t('sensor.live') : t('sensor.ok'))))
   const last = wire || water
   box.append(el('p', 'pop-meta', last ? `${t('sensor.sim')} · ${ago(last.created_at)}` : t('sensor.sim')))
-  box.append(actions(wire ? [[t('sensor.safe'), onSafe]] : [[t('sensor.wire'), onWire]]))
+  // Electricity is only a danger where there is floodwater.
+  if (wire) box.append(actions([[t('sensor.safe'), onSafe]]))
+  else if (cm >= 10) box.append(actions([[t('sensor.wire'), onWire]]))
+  else box.append(el('p', 'pop-meta', t('sensor.needWater')))
   return box
 }

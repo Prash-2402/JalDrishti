@@ -23,9 +23,9 @@ const STYLE = {
   sim: 'https://tiles.openfreemap.org/styles/dark',
 }
 const VALLEY = { center: [77.685, 12.932], zoom: 14, pitch: 62, bearing: -18 }
-const CUSTOM_SOURCES = ['dem', 'zones', 'alerts', 'avoid', 'route-fast', 'route-safe', 'route-wet', 'route-done', 'road-water', 'flood-heat']
+const CUSTOM_SOURCES = ['dem', 'zones', 'alerts', 'avoid', 'route-fast', 'route-safe', 'route-wet', 'route-gate', 'route-done', 'road-water', 'flood-heat']
 const BELOW_LABELS = ['flood-heat', 'road-water-glow', 'road-water', 'buildings-3d']
-const ABOVE_LABELS = ['zones-fill', 'zones-line', 'alerts-fill', 'alerts-line', 'avoid-fill', 'route-fast', 'route-safe-casing', 'route-safe', 'route-wet', 'route-done']
+const ABOVE_LABELS = ['zones-fill', 'zones-line', 'alerts-fill', 'alerts-line', 'avoid-fill', 'route-fast', 'route-safe-casing', 'route-safe', 'route-wet', 'route-gate', 'route-done']
 let simOn = false
 
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
@@ -166,6 +166,15 @@ export function createScene(container, onReady) {
     map.addSource('route-wet', { type: 'geojson', data: empty })
     map.addSource('route-done', { type: 'geojson', data: empty })
     map.addLayer({ id: 'route-wet', type: 'line', source: 'route-wet', layout: round, paint: { 'line-color': css('--flood-3'), 'line-width': 5 } })
+    // The deep stretch the vehicle is waiting at; pulses while the choice is open.
+    map.addSource('route-gate', { type: 'geojson', data: empty })
+    map.addLayer({
+      id: 'route-gate',
+      type: 'line',
+      source: 'route-gate',
+      layout: round,
+      paint: { 'line-color': css('--flood-2'), 'line-width': 12, 'line-blur': 3, 'line-opacity': 0.9, 'line-opacity-transition': { duration: 700 } },
+    })
     map.addLayer({ id: 'route-done', type: 'line', source: 'route-done', layout: round, paint: { 'line-color': css('--route-alt'), 'line-width': 5 } })
 
     onReady(map)
@@ -333,6 +342,21 @@ export function setAlerts(map, alerts) {
       geometry: { type: 'Polygon', coordinates: [circleRing(a.lat, a.lng, a.kind === 'wire' ? WIRE_RADIUS : 100, 32)] },
     })),
   })
+}
+
+// Highlights a stretch of road ([lat, lng] points), or clears it with null.
+export function setGate(map, coords) {
+  if (!map.style) return
+  map.getSource('route-gate')?.setData(coords ? lineFeature(coords) : empty)
+}
+export function setGateGlow(map, on) {
+  if (map.style && map.getLayer('route-gate')) map.setPaintProperty('route-gate', 'line-opacity', on ? 0.95 : 0.3)
+}
+
+// Flooded roads glow brighter while the user is choosing where to place a fault.
+export function setPlacing(map, on) {
+  if (!map.style || !map.getLayer('road-water-glow')) return
+  map.setPaintProperty('road-water-glow', 'line-opacity', on ? 0.9 : 0.45)
 }
 
 // fit: zoom to the route (off while driving, so the camera stays behind the vehicle).

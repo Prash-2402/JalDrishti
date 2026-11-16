@@ -11,15 +11,15 @@ import { floodZones } from './data/floodZones.js'
 import { clearAlert, clearDemoAlerts, listAlerts, SENSORS, sendAlert, subscribeAlerts } from './lib/alerts.js'
 import { reportCard, roadCard, sensorCard, zoneCard } from './lib/cards.js'
 import { createDrive } from './lib/drive.js'
-import { floodLines, loadDem, sampleRoads } from './lib/flood.js'
-import { distM, distToLine } from './lib/geo.js'
+import { depthAt, floodLines, loadDem, sampleRoads } from './lib/flood.js'
+import { distM } from './lib/geo.js'
 import { buildHazards, isActiveAlert, profile } from './lib/hazards.js'
 import { getLang, setLang, t } from './lib/i18n.js'
 import { reverseGeocode } from './lib/places.js'
 import { findRoute } from './lib/routing.js'
 import {
-  createScene, drawRoute, isNarrow, RAIN_WATER, roadNameAt, set3D, setAlerts, setAvoidZones, setFloodData, setHeatVisible, setMapLang,
-  setSimulationView, setZonesVisible, viewPadding,
+  createScene, drawRoute, isNarrow, RAIN_WATER, roadNameAt, set3D, setAlerts, setAvoidZones, setFloodData, setGate, setGateGlow, setHeatVisible,
+  setMapLang, setPlacing as setPlacingGlow, setSimulationView, setZonesVisible, viewPadding,
 } from './lib/scene.js'
 import { MODES, SEVERITY, sev } from './lib/severity.js'
 import { listHistory, listReports, live, loadTrips, saveTrips, subscribe, voteReport } from './lib/store.js'
@@ -117,7 +117,11 @@ export default function App() {
   const driveRef = useRef(null)
   const tickRef = useRef(null)
   const knownRef = useRef([]) // water on the current drive route, already planned for
-  const rerouteRef = useRef({ busy: false, last: 0, held: false })
+  const rerouteRef = useRef({ busy: false, last: 0, strict: false, gate: null })
+  const decidedRef = useRef([]) // deep water the user chose to go through
+  const placingRef = useRef(false)
+  const placeRef = useRef(null)
+  const waterAtRef = useRef(null)
 
   const [map, setMap] = useState(null)
   const [tab, setTab] = useState('map')
@@ -151,6 +155,9 @@ export default function App() {
   const [banner, setBanner] = useState(null) // drive status: { tone, text, auto? }
   const [alarm, setAlarm] = useState(null) // new alert: { tone, text, alertId, auto? }
   const [note, setNote] = useState('')
+  const [rerouting, setRerouting] = useState(false)
+  const [placing, setPlacing] = useState(false) // choosing where to put an electricity fault
+  const [placeErr, setPlaceErr] = useState(false)
   const [msg, setMsg] = useState('')
   const [, setTick] = useState(0)
 
@@ -185,6 +192,7 @@ export default function App() {
   useEffect(() => {
     const m = createScene(boxRef.current, setMap)
     m.on('click', (e) => {
+      if (placingRef.current) return placeRef.current?.(e)
       const which = pickRef.current
       if (!which) return
       setNamed({ pin: setPin, start: setStart, end: setEnd }[which], { lat: e.lngLat.lat, lng: e.lngLat.lng })
@@ -205,6 +213,12 @@ export default function App() {
   useEffect(() => {
     tabRef.current = tab
   }, [tab])
+  useEffect(() => {
+    placingRef.current = placing
+    if (!map) return
+    setPlacingGlow(map, placing)
+    map.getCanvas().style.cursor = placing ? 'crosshair' : ''
+  }, [placing, map])
 
   useEffect(() => {
     refresh()
@@ -485,10 +499,11 @@ export default function App() {
         sensorCard(s, {
           water: s.wet,
           wire: s.wire,
-          cm: s.wire?.cm || s.wet?.cm || 0,
+          cm: s.wire?.cm || s.wet?.cm || waterAtRef.current?.(s) || 0,
           onWire: () => {
             popupRef.current?.remove()
-            sendAlert({ kind: 'wire', lat: s.lat, lng: s.lng, place: s.name, sensorId: s.id }).catch((err) => setMsg(err.message))
+            const cm = s.wet?.cm || waterAtRef.current?.(s) || 0
+            sendAlert({ kind: 'wire', lat: s.lat, lng: s.lng, cm, place: s.name, sensorId: s.id }).catch((err) => setMsg(err.message))
           },
           onSafe: () => {
             popupRef.current?.remove()
@@ -566,33 +581,73 @@ export default function App() {
     setAvoidZones(map, route ? shown.filter((r) => SEVERITY[r.severity].cm >= modeCfg.avoidCm) : [])
   }, [map, route]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Driving: every tick checks the road ahead; new water or danger re-plans
-  // the route from just ahead of the vehicle without stopping it.
-  const isKnown = (s) => knownRef.current.some((k) => (s.id && k.id === s.id) || (!s.id && distM(k, s) < KNOWN_M))
-  const reroute = async (reason) => {
+  // Driving. Every tick checks the road ahead:
+  //   electricity: always go around it; if every route crosses it, stop short and wait
+  //   new water: look for a drier route; if there is none, take the least water
+  //   water deeper than the vehicle can handle: pause before it and ask
+  // Water already planned for never triggers a reroute again, so there are no loops.
+  const matches = (list, s) => list.some((k) => (s.id && k.id === s.id) || (!s.id && distM(k, s) < KNOWN_M))
+  const vehicle = t(`mode.${mode}`)
+
+  const clearGate = () => {
+    rerouteRef.current.gate = null
+    if (map) setGate(map, null)
+    driveRef.current?.setZoom(16)
+    setDriveInfo((i) => i && { ...i, prompt: null })
+  }
+  const openGate = (spot, at) => {
+    const d = driveRef.current
+    d.stopBefore(at + spot.at - 80)
+    rerouteRef.current.gate = { spot, waiting: false }
+    setGate(map, d.slice(at + spot.at, at + spot.end + 20))
+    d.setZoom(15.3) // pull back so the water is in view
+    setDriveInfo((i) => i && { ...i, prompt: { cm: spot.cm, m: Math.max(20, Math.round((spot.end - spot.at + 25) / 10) * 10), waiting: false } })
+  }
+  const gateWait = () => {
+    const g = rerouteRef.current.gate
+    if (!g) return
+    g.waiting = true
+    setDriveInfo((i) => i && { ...i, prompt: { ...i.prompt, waiting: true } })
+  }
+  const gateGo = () => {
+    const g = rerouteRef.current.gate
+    if (!g) return
+    decidedRef.current.push(g.spot)
+    driveRef.current?.release()
+    clearGate()
+  }
+
+  const reroute = async (reason, force = false) => {
     const d = driveRef.current
     const st = rerouteRef.current
-    if (!d || st.busy || performance.now() - st.last < 5000) return
+    if (!d || st.busy || (!force && performance.now() - st.last < 5000)) return
     st.busy = true
+    setRerouting(true)
     const blockAt = reason.m != null ? d.at + reason.m : null
     if (blockAt != null) d.stopBefore(blockAt - 120) // never drive into it while the new route loads
-    setBanner({ tone: reason.kind === 'wire' ? 'danger' : 'water', text: reason.kind === 'wire' ? t('bn.wireAhead') : reason.kind === 'off' ? t('bn.offRoute') : t('bn.rising', reason.cm) })
+    if (reason.kind === 'wire') setBanner({ tone: 'danger', text: t('bn.wireAhead') })
+    else if (reason.kind === 'water') setBanner({ tone: 'water', text: t('bn.rising', reason.cm) })
+    else if (reason.kind === 'off') setBanner({ tone: 'water', text: t('bn.offRoute') })
     const originAt = blockAt != null ? d.at + Math.max(0, Math.min(300, blockAt - d.at - 250)) : d.at
     const o = d.pointAt(originAt)
-    const w = sim || replay ? waterRef.current : 0
+    const w = waterRef.current
+    const hz = buildHazards(reportsRef.current, alerts, true)
     try {
-      const r = await findRoute({ lat: o.lat, lng: o.lng }, end, { hazards: buildHazards(reportsRef.current, alerts, true), water: w, mode: modeCfg })
+      const r = await findRoute({ lat: o.lat, lng: o.lng }, end, { hazards: hz, water: w, mode: modeCfg })
       if (driveRef.current !== d) return
-      if (r.status === 'blocked' || r.status === 'wire') {
-        d.stopBefore((blockAt ?? d.at) - 200)
-        st.held = true
-        setBanner({ tone: 'danger', text: t('bn.stop') })
+      if (r.status === 'wire') {
+        // Every route crosses electricity: stop well short of it and wait for it to clear.
+        const ahead = profile(d.slice(d.at), hz, w, modeCfg.avoidCm, [end])
+        d.stopBefore(d.at + Math.max(0, (ahead.hard?.at ?? reason.m ?? 0) - 200))
+        st.strict = true
+        if (st.gate) clearGate()
+        setDriveInfo((i) => i && { ...i, strict: true })
+        setBanner(null)
         return
       }
       const oldRest = d.slice(d.at)
       const coords = [...d.slice(d.at, Math.max(d.at, originAt)), ...r.safe.coords]
       d.reroute(coords)
-      const hz = buildHazards(reportsRef.current, alerts, true)
       const prof = profile(coords, hz, w, modeCfg.avoidCm, [end])
       knownRef.current = prof.spots
       const timed = (c) => ({ coords: c, km: lineM(c) / 1000, min: lineM(c) / d.mps / 60 })
@@ -602,37 +657,72 @@ export default function App() {
         fastest: { ...timed(oldRest), prof: profile(oldRest, hz, w, modeCfg.avoidCm, [end]) },
         simulated: w > 0,
       })
-      setBanner({ tone: 'info', text: r.status === 'wet' ? t('bn.least') : t('bn.rerouted'), auto: 4000 })
+      st.strict = false
+      if (st.gate) clearGate()
+      setDriveInfo((i) => i && { ...i, strict: false })
+      const cm = prof.maxCm
+      setBanner(
+        r.status === 'dry'
+          ? { tone: 'info', text: t('bn.rerouted'), auto: 4000 }
+          : r.status === 'blocked'
+            ? { tone: 'warn', text: t('bn.deep', { cm, vehicle }), auto: 8000 }
+            : { tone: 'warn', text: t('bn.least', cm), auto: 6000 },
+      )
     } catch (e) {
       setMsg(e.message)
       d.release()
     } finally {
       st.busy = false
       st.last = performance.now()
+      setRerouting(false)
     }
   }
+
   tickRef.current = ({ at, leftM, leftMin, offRoute }) => {
     const d = driveRef.current
     if (!d) return
-    const w = sim || replay ? waterRef.current : 0
-    const prof = profile(d.slice(at, at + LOOK_M), buildHazards(reportsRef.current, alerts), w, modeCfg.avoidCm, [end])
+    const st = rerouteRef.current
+    const prof = profile(d.slice(at, at + LOOK_M), buildHazards(reportsRef.current, alerts), waterRef.current, modeCfg.avoidCm, [end])
+    d.setSlow(prof.spots.map((s) => [at + s.at - 15, at + s.end + 25]))
+    const inWater = prof.spots.find((s) => s.at <= 5)
     const spot = prof.spots.find((s) => s.at > 40) // water under the vehicle cannot be avoided any more
     const wireFirst = prof.hard && (!spot || prof.hard.at < spot.at)
-    const next = wireFirst ? { kind: 'wire', m: prof.hard.at, id: prof.hard.id } : spot ? { kind: 'water', cm: spot.cm, m: spot.at } : null
-    setDriveInfo((i) => i && { ...i, leftM, leftMin, next })
-    const st = rerouteRef.current
-    if (st.held && !next) {
-      st.held = false // the danger cleared: carry on
+    const next = wireFirst ? { kind: 'wire', m: prof.hard.at } : spot ? { kind: 'water', cm: spot.cm, m: spot.at } : null
+    setDriveInfo((i) => i && { ...i, leftM, leftMin, next, inWater: inWater?.cm || 0 })
+
+    if (st.strict && !prof.hard) {
+      st.strict = false // the electricity was cleared: carry on
       d.release()
-      setBanner(null)
+      setDriveInfo((i) => i && { ...i, strict: false })
     }
+    if (st.gate) {
+      const still = prof.spots.some((s) => distM(s, st.gate.spot) < KNOWN_M && s.cm >= modeCfg.maxCm)
+      if (!still) {
+        d.release() // the water went down: carry on
+        clearGate()
+      } else if (st.gate.waiting && performance.now() - st.last > 30000) reroute({ kind: 'manual' }, true) // a drier way may have opened
+    }
+    if (st.busy || st.strict) return
     if (offRoute) reroute({ kind: 'off' })
-    else if (wireFirst && !isKnown(prof.hard)) reroute(next)
-    else if (!wireFirst && spot && !isKnown(spot)) reroute(next)
+    else if (wireFirst) reroute(next)
+    else if (spot && !matches(knownRef.current, spot)) reroute(next)
+    else if (!st.gate && !d.gps && spot && spot.cm >= modeCfg.maxCm && spot.at < 300 && !matches(decidedRef.current, spot)) openGate(spot, at)
   }
 
+  // The deep stretch pulses while the choice is open.
+  const prompting = Boolean(driveInfo?.prompt && !driveInfo.prompt.waiting)
+  useEffect(() => {
+    if (!map || !prompting) return
+    let on = false
+    const timer = setInterval(() => setGateGlow(map, (on = !on)), 700)
+    return () => {
+      clearInterval(timer)
+      setGateGlow(map, true)
+    }
+  }, [map, prompting])
+
   const startDrive = (gps) => {
-    if (!map || !route) return
+    if (!map || !route || route.status === 'wire') return
     driveRef.current?.stop()
     popupRef.current?.remove()
     const d = createDrive(map, {
@@ -642,7 +732,8 @@ export default function App() {
     })
     driveRef.current = d
     knownRef.current = route.safe.prof.spots
-    rerouteRef.current = { busy: false, last: 0, held: false }
+    decidedRef.current = []
+    rerouteRef.current = { busy: false, last: 0, strict: false, gate: null }
     d.setSpeed(speed)
     d.start(route.safe.coords, route.safe.min)
     setDriveInfo({ leftM: route.safe.km * 1000, leftMin: route.safe.min, next: null, gps })
@@ -652,6 +743,7 @@ export default function App() {
   const stopDrive = () => {
     driveRef.current?.stop()
     driveRef.current = null
+    if (map) setGate(map, null)
     setDriveInfo(null)
     setBanner(null)
     setRouteNonce((n) => n + 1)
@@ -665,25 +757,46 @@ export default function App() {
     const p = d.pointAt(Math.min(d.at + 600, d.total - 150))
     sendAlert({ kind: 'water', lat: p.lat, lng: p.lng, cm: 60, place: roadNameAt(map, map.project([p.lng, p.lat])) || t('road.road') }).catch((e) => setMsg(e.message))
   }
-  const liveWire = () => {
-    if (!map) return
-    const d = driveRef.current
-    let target = null
-    if (d && d.total - d.at > 600) {
-      const ahead = d.slice(d.at + 300, d.at + 2500)
-      const s = SENSORS.find((x) => distToLine(x.lat, x.lng, ahead) < 120)
-      if (s) target = { lat: s.lat, lng: s.lng, place: s.name, sensorId: s.id }
-      else {
-        const p = d.pointAt(d.at + Math.min(800, (d.total - d.at) / 2))
-        target = { lat: p.lat, lng: p.lng, place: roadNameAt(map, map.project([p.lng, p.lat])) || t('sensor.pole') }
+
+  // Water depth at a point: a flooded road in the simulation, a report or a water alert.
+  const waterAt = (p) => {
+    const cm = depthAt(p.lng, p.lat, waterRef.current)
+    if (cm >= 10) return cm
+    const h = buildHazards(reportsRef.current, alerts).find((x) => !x.hard && x.cm >= 10 && distM(x, p) < x.radius)
+    return h ? h.cm : 0
+  }
+  waterAtRef.current = waterAt
+  const startPlacing = () => {
+    const anyWater = waterRef.current > 0 || buildHazards(reportsRef.current, alerts).some((h) => !h.hard && h.cm >= 10)
+    if (!anyWater) return setMsg(t('place.none'))
+    popupRef.current?.remove()
+    setPlaceErr(false)
+    setPlacing(true)
+  }
+  // A tap while placing: snap to the nearest flooded road within 60 m, else
+  // accept it inside a report or water alert, else explain and shake.
+  placeRef.current = (e) => {
+    const tap = { lat: e.lngLat.lat, lng: e.lngLat.lng }
+    let best = null
+    const box = [[e.point.x - 30, e.point.y - 30], [e.point.x + 30, e.point.y + 30]]
+    for (const f of map.queryRenderedFeatures(box, { layers: ['road-water'] })) {
+      const lines = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates
+      for (const [lng, lat] of lines.flat()) {
+        const dist = distM(tap, { lat, lng })
+        if (dist < 60 && (!best || dist < best.dist)) best = { lat, lng, dist, cm: f.properties.depth }
       }
-    } else {
-      const c = map.getCenter()
-      const s = SENSORS.reduce((a, b) => (distM(b, { lat: c.lat, lng: c.lng }) < distM(a, { lat: c.lat, lng: c.lng }) ? b : a))
-      target = { lat: s.lat, lng: s.lng, place: s.name, sensorId: s.id }
-      map.flyTo({ center: [s.lng, s.lat], zoom: Math.max(map.getZoom(), 14.5), padding: viewPadding(), duration: 900 })
     }
-    sendAlert({ kind: 'wire', ...target }).catch((e) => setMsg(e.message))
+    const here = best ? 0 : waterAt(tap)
+    if (here) best = { ...tap, cm: here }
+    if (!best) {
+      setPlaceErr(false)
+      requestAnimationFrame(() => setPlaceErr(true)) // restart the shake
+      return
+    }
+    setPlacing(false)
+    sendAlert({ kind: 'wire', lat: best.lat, lng: best.lng, cm: best.cm, place: roadNameAt(map, map.project([best.lng, best.lat])) || t('road.road') }).catch((err) =>
+      setMsg(err.message),
+    )
   }
   const enterSim = () => {
     if (sim || !map) return
@@ -927,7 +1040,7 @@ export default function App() {
 
       <main className="map-wrap">
         <div ref={boxRef} className="map" />
-        <DemoMenu driving={Boolean(driveInfo)} onReplay={startReplay} onRaise={raiseWater} onWire={liveWire} onClear={() => clearDemoAlerts(alerts).catch((e) => setMsg(e.message))} />
+        <DemoMenu driving={Boolean(driveInfo)} onReplay={startReplay} onRaise={raiseWater} onPlace={startPlacing} onClear={() => clearDemoAlerts(alerts).catch((e) => setMsg(e.message))} />
         <div className="map-top">
           {[alarm, banner].map(
             (b, i) =>
@@ -946,6 +1059,14 @@ export default function App() {
               <span>{t('rp.at', { date: replayDate, mm: Math.round(rain3h(replay.data.hours, replay.h)) })}</span>
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => (setReplay(null), setWater(0))}>
                 {t('rp.stop')}
+              </button>
+            </div>
+          )}
+          {placing && (
+            <div className={`map-banner${placeErr ? ' shake' : ''}`} role="status">
+              <span>{placeErr ? t('place.dry') : t('place.tap')}</span>
+              <button type="button" className="icon-btn" aria-label={t('cancel')} onClick={() => setPlacing(false)}>
+                <X size={16} />
               </button>
             </div>
           )}
@@ -974,6 +1095,7 @@ export default function App() {
         {driveInfo && (
           <DriveHud
             info={driveInfo}
+            mode={mode}
             speed={speed}
             paused={paused}
             gps={driveInfo.gps}
@@ -986,6 +1108,10 @@ export default function App() {
               driveRef.current?.setPaused(!paused)
             }}
             onStop={stopDrive}
+            rerouting={rerouting}
+            onReroute={() => reroute({ kind: 'manual' }, true)}
+            onWait={gateWait}
+            onGo={gateGo}
           />
         )}
       </main>

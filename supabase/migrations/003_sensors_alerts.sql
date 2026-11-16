@@ -60,8 +60,8 @@ create policy "read sensors" on public.sensors for select using (true);
 create policy "read readings" on public.sensor_readings for select using (true);
 create policy "read alerts" on public.alerts for select using (true);
 
--- A reading turns into an alert: electricity (10 V or more) is a danger zone
--- for 2 hours; water 30 cm or deeper is "water rising" for 1 hour, kept fresh
+-- A reading turns into an alert: electricity (10 V or more) in floodwater
+-- (10 cm or more) is a danger zone for 2 hours; water 30 cm or deeper is "water rising" for 1 hour, kept fresh
 -- while readings stay high. Normal readings clear the sensor's alerts.
 create or replace function public.on_reading() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -69,7 +69,7 @@ declare s sensors;
 begin
   select * into s from sensors where id = new.sensor_id;
 
-  if coalesce(new.volts, 0) >= 10 then
+  if coalesce(new.volts, 0) >= 10 and coalesce(new.water_cm, 0) >= 10 then
     if not exists (select 1 from alerts where sensor_id = s.id and kind = 'wire' and cleared_at is null and expires_at > now()) then
       insert into alerts (kind, lat, lng, cm, place, sensor_id, is_simulated, expires_at)
       values ('wire', s.lat, s.lng, new.water_cm, s.name, s.id, s.is_simulated, now() + interval '2 hours');

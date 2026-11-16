@@ -22,10 +22,14 @@ Flood alerts and safer routes for Bellandur and the Outer Ring Road, Bengaluru. 
 
 **Drive**
 - **Start drive** moves a vehicle along the route with the camera behind it (1×, 5×, 10×). **Use my real location** follows your phone's GPS instead.
-- The road ahead is checked continuously. When water rises or danger appears ahead, the route is re-planned from just ahead of the vehicle without stopping. If there is no way around, it stops short and waits.
+- The road ahead is checked continuously. When water rises or danger appears ahead, the route is re-planned from just ahead of the vehicle without stopping.
+- **Water never forces a stop.** If every route has water, it takes the one with the least and drives through it at a third of the speed. Before water deeper than the vehicle can handle, it eases to a halt and asks: **Wait** or **Go through slowly**.
+- **Reroute** in the drive panel asks for a new route at any time.
 
 **Electricity in floodwater**
-- A sensor that detects electricity in the water creates a 150 m danger zone. Every route avoids it, and every open device shows a red alert, vibrates and plays a tone.
+- Electricity is only a danger in floodwater, so a fault can only be placed on a flooded road (or inside a report or water alert). Real sensors raise it only when they also measure water.
+- It creates a 150 m danger zone. Every route avoids it, and every open device shows a red alert, vibrates and plays a tone.
+- **If every route crosses electricity**, the vehicle stops 200 m short with a red "Stop here" card, and carries on by itself once the fault is cleared.
 
 **Activity**
 - A live log of reports, votes, water and electricity alerts, and rain-level changes. Filter by last hour, today or 7 days. New items are marked "New".
@@ -39,10 +43,10 @@ The **Demo** button on the map triggers what sensors would do, for judging and t
 
 1. **Replay Sept 2022**: the Aug–Sept 2022 Bellandur floods in 60 seconds, from real hourly rainfall.
 2. **Raise water ahead** (during a drive): floods the road 600 m ahead; watch the route change.
-3. **Live wire at a sensor**: electricity in the water at the sensor nearest your route (or the map centre).
+3. **Place electricity fault**: tap a flooded road to put a fault there. Taps away from water are refused.
 4. **Clear demo events**.
 
-A good two-minute demo: save a Home → Office trip, start the drive, raise water ahead, then trigger a live wire. Open the app on a phone too: the alert appears there as well.
+A good two-minute demo: save a Home → Office trip, start the drive, raise water ahead, then place an electricity fault on a flooded road ahead. Open the app on a phone too: the alert appears there as well.
 
 ## How the flood simulation works
 

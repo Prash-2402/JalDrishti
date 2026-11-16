@@ -161,6 +161,9 @@ button, input { font: inherit; color: inherit; }
 .alert-bar.danger .icon-btn { color: #fff; }
 .alert-bar.water { border-left: 4px solid var(--flood-2); }
 .alert-bar.info { border-left: 4px solid var(--ok); }
+.alert-bar.warn { border-left: 4px solid var(--sev-2); }
+.map-banner.shake { border-color: var(--sev-2); animation: shake 0.4s; }
+@keyframes shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
 
 .demo { position: absolute; top: 12px; left: 12px; z-index: 5; }
 .demo-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: 13px; font-weight: 500; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1); cursor: pointer; }
@@ -176,6 +179,22 @@ button, input { font: inherit; color: inherit; }
 .hud-main .hud-danger { color: var(--sev-3); font-weight: 600; }
 .hud-actions { display: flex; align-items: center; gap: 4px; }
 .hud .seg button { min-height: 28px; padding: 2px 8px; }
+.hud { transition: background 0.2s, border-color 0.2s; animation: rise 0.25s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+.hud-main b { display: flex; align-items: center; gap: 8px; }
+.hud-link { margin-left: 8px; font-size: 13px; }
+.hud.prompt { flex-wrap: wrap; padding: 14px 14px 14px 16px; }
+.hud.prompt .hud-main span { white-space: normal; }
+.hud-choice { display: flex; flex-basis: 100%; gap: 8px; }
+.hud-choice .btn { flex: 1; }
+.hud.strict { gap: 12px; border-color: var(--sev-3); background: var(--sev-3); color: #fff; }
+.hud.strict .hud-main span { color: rgba(255, 255, 255, 0.85); white-space: normal; }
+.hud.strict .icon-btn { color: #fff; }
+.hud.strict .icon-btn:hover { background: rgba(255, 255, 255, 0.15); }
+.icon-btn:disabled { opacity: 0.6; cursor: default; }
+.spin svg { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn:disabled, .link:disabled { opacity: 0.45; cursor: default; }
 
 .car { width: 22px; height: 22px; border: 3px solid #fff; border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; background: var(--focus); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); }
 .car::after { content: ''; position: absolute; top: -9px; left: 50%; border: 6px solid transparent; border-bottom: 8px solid var(--focus); transform: translateX(-50%); }
