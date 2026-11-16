@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Camera, X } from 'lucide-react'
 import { reverseGeocode } from '../lib/places.js'
-import { SEVERITY } from '../lib/severity.js'
+import { t } from '../lib/i18n.js'
+import { LEVELS, sev } from '../lib/severity.js'
 import { addReport, shrinkPhoto } from '../lib/store.js'
 import { PanelHeader, PointField } from './ui.jsx'
 
@@ -27,12 +28,12 @@ export default function ReportForm({ pin, onPick, onGps, onDone, onCancel, onErr
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!pin) return onError('Choose where the water is first.')
-    if (!severity) return onError('Choose how deep the water is.')
+    if (!pin) return onError(t('err.noPin'))
+    if (!severity) return onError(t('err.noDepth'))
     const observedAt = time ? new Date(time) : new Date()
     const age = Date.now() - observedAt.getTime()
     if (Number.isNaN(age) || age < -5 * 60000 || age > 60 * 60000) {
-      return onError('Time seen must be within the last hour.')
+      return onError(t('err.time'))
     }
     setBusy(true)
     try {
@@ -49,16 +50,16 @@ export default function ReportForm({ pin, onPick, onGps, onDone, onCancel, onErr
 
   return (
     <form onSubmit={submit} className="stack">
-      <PanelHeader title="Report waterlogging" subtitle="Help others avoid it" onBack={onCancel} />
+      <PanelHeader title={t('report.cta')} subtitle={t('rf.sub')} onBack={onCancel} />
 
-      <PointField label="Where" value={pin} onGps={onGps} onPick={onPick} />
+      <PointField label={t('rf.where')} value={pin} onGps={onGps} onPick={onPick} />
 
       <fieldset className="options">
-        <legend className="field-label">How deep is the water?</legend>
-        {Object.entries(SEVERITY).map(([k, s]) => {
-          const n = Number(k)
+        <legend className="field-label">{t('rf.depth')}</legend>
+        {LEVELS.map((n) => {
+          const s = sev(n)
           return (
-            <label key={k} className={`option${severity === n ? ' on' : ''}`}>
+            <label key={n} className={`option${severity === n ? ' on' : ''}`}>
               <input type="radio" name="severity" checked={severity === n} onChange={() => setSeverity(n)} />
               <span className="sev-dot" style={{ background: s.color }} />
               <span className="option-main">
@@ -72,17 +73,17 @@ export default function ReportForm({ pin, onPick, onGps, onDone, onCancel, onErr
       </fieldset>
 
       <div className="field">
-        <span className="field-label">Photo (optional)</span>
+        <span className="field-label">{t('rf.photo')}</span>
         {photo ? (
           <div className="thumb">
             <img src={photo} alt="Selected" />
-            <button type="button" className="icon-btn thumb-remove" aria-label="Remove photo" onClick={() => setPhoto(null)}>
+            <button type="button" className="icon-btn thumb-remove" aria-label={t('rf.removePhoto')} onClick={() => setPhoto(null)}>
               <X size={16} />
             </button>
           </div>
         ) : (
           <label className="btn btn-secondary btn-block">
-            <Camera size={16} /> Add photo
+            <Camera size={16} /> {t('rf.addPhoto')}
             <input type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
           </label>
         )}
@@ -90,26 +91,26 @@ export default function ReportForm({ pin, onPick, onGps, onDone, onCancel, onErr
 
       <div className="field">
         <label className="field-label" htmlFor="note">
-          Note (optional)
+          {t('rf.note')}
         </label>
-        <input id="note" className="input" maxLength={280} placeholder="e.g. underpass closed" value={note} onChange={(e) => setNote(e.target.value)} />
+        <input id="note" className="input" maxLength={280} placeholder={t('rf.notePh')} value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
 
       {time === null ? (
         <button type="button" className="link" onClick={() => setTime(localNow())}>
-          Seen earlier than now?
+          {t('rf.earlier')}
         </button>
       ) : (
         <div className="field">
           <label className="field-label" htmlFor="time">
-            Time seen
+            {t('rf.time')}
           </label>
           <input id="time" className="input" type="datetime-local" value={time} max={localNow()} onChange={(e) => setTime(e.target.value)} />
         </div>
       )}
 
       <button className="btn btn-primary btn-block" disabled={busy}>
-        {busy ? 'Sending…' : 'Send report'}
+        {busy ? t('rf.sending') : t('rf.send')}
       </button>
     </form>
   )

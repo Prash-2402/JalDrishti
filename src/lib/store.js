@@ -1,11 +1,12 @@
 // Report storage. Uses Supabase when keys are set, otherwise this browser's
 // localStorage (demo mode) so the app works before any backend exists.
 import { createClient } from '@supabase/supabase-js'
+import { t } from './i18n.js'
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY
 export const live = Boolean(url && key)
-const sb = live ? createClient(url, key) : null
+export const sb = live ? createClient(url, key) : null
 
 // Hours a report stays on the map, by severity. A "still flooded" vote resets it.
 export const TTL_HOURS = { 1: 2, 2: 4, 3: 6 }
@@ -148,7 +149,24 @@ export function shrinkPhoto(file, maxSide = 900) {
       URL.revokeObjectURL(img.src)
       resolve(canvas.toDataURL('image/jpeg', 0.7))
     }
-    img.onerror = () => reject(new Error('Could not read that photo'))
+    img.onerror = () => reject(new Error(t('err.photo')))
     img.src = URL.createObjectURL(file)
   })
+}
+
+// Saved trips live on this device only, so no sign-in is needed.
+const TRIPS_KEY = 'jaldrishti.trips'
+export function loadTrips() {
+  try {
+    return JSON.parse(localStorage.getItem(TRIPS_KEY)) || []
+  } catch {
+    return []
+  }
+}
+export function saveTrips(trips) {
+  try {
+    localStorage.setItem(TRIPS_KEY, JSON.stringify(trips))
+  } catch {
+    // storage full or blocked: kept for this visit only
+  }
 }

@@ -1,11 +1,12 @@
 import { ArrowLeft, LocateFixed, MapPin } from 'lucide-react'
 import { coords } from '../lib/format.js'
+import { t } from '../lib/i18n.js'
 
 export function PanelHeader({ title, subtitle, onBack }) {
   return (
     <header className="panel-header">
       {onBack && (
-        <button type="button" className="icon-btn" aria-label="Back" onClick={onBack}>
+        <button type="button" className="icon-btn" aria-label={t('back')} onClick={onBack}>
           <ArrowLeft size={18} />
         </button>
       )}
@@ -21,14 +22,14 @@ export function PointField({ label, value, onGps, onPick }) {
   return (
     <div className="point-field">
       <span className="pf-label">{label}</span>
-      <span className={`pf-value${value ? '' : ' empty'}`}>{value ? value.name || coords(value) : 'Not set'}</span>
+      <span className={`pf-value${value ? '' : ' empty'}`}>{value ? value.name || coords(value) : t('pf.notSet')}</span>
       <span className="pf-actions">
         {onGps && (
-          <button type="button" className="icon-btn" title="Use my location" aria-label={`${label}: use my location`} onClick={onGps}>
+          <button type="button" className="icon-btn" title={t('pf.gps')} aria-label={`${label}: ${t('pf.gps')}`} onClick={onGps}>
             <LocateFixed size={16} />
           </button>
         )}
-        <button type="button" className="icon-btn" title="Choose on map" aria-label={`${label}: choose on map`} onClick={onPick}>
+        <button type="button" className="icon-btn" title={t('pf.pick')} aria-label={`${label}: ${t('pf.pick')}`} onClick={onPick}>
           <MapPin size={16} />
         </button>
       </span>

@@ -1,6 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import '@fontsource-variable/inter'
+import '@fontsource-variable/noto-sans-kannada'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './theme.css'
 import './styles.css'

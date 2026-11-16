@@ -1,42 +1,75 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import { Droplet, History, Map as MapIcon, Route as RouteIcon, X } from 'lucide-react'
+import { Droplet, History, Map as MapIcon, Route as RouteIcon, X, Zap } from 'lucide-react'
 import ActivityPanel from './components/ActivityPanel.jsx'
+import DemoMenu from './components/DemoMenu.jsx'
+import DriveHud from './components/DriveHud.jsx'
 import MapPanel from './components/MapPanel.jsx'
 import ReportForm from './components/ReportForm.jsx'
 import RoutePanel from './components/RoutePanel.jsx'
 import { floodZones } from './data/floodZones.js'
-import { reportCard, roadCard, zoneCard } from './lib/cards.js'
-import { floodedRoads, floodSpotsAlong, loadDem } from './lib/flood.js'
-import { distM } from './lib/geo.js'
+import { clearAlert, clearDemoAlerts, listAlerts, SENSORS, sendAlert, subscribeAlerts } from './lib/alerts.js'
+import { reportCard, roadCard, sensorCard, zoneCard } from './lib/cards.js'
+import { createDrive } from './lib/drive.js'
+import { floodLines, loadDem, sampleRoads } from './lib/flood.js'
+import { distM, distToLine } from './lib/geo.js'
+import { buildHazards, isActiveAlert, profile } from './lib/hazards.js'
+import { getLang, setLang, t } from './lib/i18n.js'
 import { reverseGeocode } from './lib/places.js'
 import { findRoute } from './lib/routing.js'
 import {
-  createScene, drawRoute, isNarrow, RAIN_WATER, set3D, setAvoidZones, setFloodData, setHeatVisible, setSimulationView, setZonesVisible, viewPadding,
+  createScene, drawRoute, isNarrow, RAIN_WATER, roadNameAt, set3D, setAlerts, setAvoidZones, setFloodData, setHeatVisible, setMapLang,
+  setSimulationView, setZonesVisible, viewPadding,
 } from './lib/scene.js'
-import { MODES, SEVERITY } from './lib/severity.js'
-import { listHistory, listReports, live, subscribe, voteReport } from './lib/store.js'
+import { MODES, SEVERITY, sev } from './lib/severity.js'
+import { listHistory, listReports, live, loadTrips, saveTrips, subscribe, voteReport } from './lib/store.js'
 import { getRainAlert } from './lib/weather.js'
 
 const TABS = [
-  { id: 'map', label: 'Map', icon: MapIcon },
-  { id: 'route', label: 'Route', icon: RouteIcon },
-  { id: 'activity', label: 'Activity', icon: History },
+  { id: 'map', icon: MapIcon },
+  { id: 'route', icon: RouteIcon },
+  { id: 'activity', icon: History },
 ]
-const PICK_LABEL = { pin: 'where the water is', start: 'your starting point', end: 'your destination' }
 const SPOT_RADIUS = 200 // metres: reports this close count as the same spot
+const LOOK_M = 2000 // while driving, the road this far ahead is checked
+const KNOWN_M = 120 // water this close to water already planned for is not new
+const REPLAY_MS = 60000
+const RAIN_KEY = 'jaldrishti.rain'
 
 const near = (rows, p, radius) => rows.filter((h) => distM(h, p) <= radius).length
+const thin = (coords, max = 400) => coords.filter((_, i) => i % Math.ceil(coords.length / max) === 0 || i === coords.length - 1)
+const lineM = (c) => c.reduce((s, p, i) => (i ? s + distM({ lat: c[i - 1][0], lng: c[i - 1][1] }, { lat: p[0], lng: p[1] }) : 0), 0)
+const rain3h = (hours, h) => hours.slice(Math.max(0, Math.floor(h) - 2), Math.floor(h) + 1).reduce((s, x) => s + x, 0)
 
 function locate() {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('This device has no location access.'))
+    if (!navigator.geolocation) return reject(new Error(t('err.noGps')))
     navigator.geolocation.getCurrentPosition(
       (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
-      () => reject(new Error('Location permission denied. Choose on the map instead.')),
+      () => reject(new Error(t('err.gpsDenied'))),
       { enableHighAccuracy: true, timeout: 10000 },
     )
   })
+}
+
+// Vibrate and play two short tones for a danger alert.
+function buzz() {
+  navigator.vibrate?.([200, 100, 200, 100, 400])
+  try {
+    const ctx = new AudioContext()
+    for (const [at, f] of [[0, 880], [0.3, 660]]) {
+      const o = ctx.createOscillator()
+      const g = ctx.createGain()
+      o.frequency.value = f
+      g.gain.setValueAtTime(0.15, ctx.currentTime + at)
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + at + 0.25)
+      o.connect(g).connect(ctx.destination)
+      o.start(ctx.currentTime + at)
+      o.stop(ctx.currentTime + at + 0.25)
+    }
+  } catch {
+    // sound blocked until the user interacts with the page
+  }
 }
 
 function usePointMarker(map, point, className) {
@@ -49,14 +82,42 @@ function usePointMarker(map, point, className) {
   }, [map, point?.lat, point?.lng, className]) // eslint-disable-line react-hooks/exhaustive-deps
 }
 
+// Keeps one HTML marker per item ({ key, lat, lng }); make(item) builds its element.
+function useMarkers(map, items, make) {
+  const store = useRef(new Map())
+  useEffect(() => {
+    if (!map) return
+    const m = store.current
+    const keys = new Set(items.map((i) => i.key))
+    for (const [k, marker] of m) {
+      if (!keys.has(k)) {
+        marker.remove()
+        m.delete(k)
+      }
+    }
+    for (const i of items) if (!m.has(i.key)) m.set(i.key, new maplibregl.Marker({ element: make(i) }).setLngLat([i.lng, i.lat]).addTo(map))
+  }, [map, items]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const m = store.current
+    return () => {
+      m.forEach((marker) => marker.remove())
+      m.clear()
+    }
+  }, [map])
+}
+
 export default function App() {
   const boxRef = useRef(null)
   const pickRef = useRef(null)
-  const markersRef = useRef(new Map())
   const popupRef = useRef(null)
   const reportsRef = useRef([])
   const historyRef = useRef([])
+  const tabRef = useRef('map')
   const waterTouched = useRef(false)
+  const driveRef = useRef(null)
+  const tickRef = useRef(null)
+  const knownRef = useRef([]) // water on the current drive route, already planned for
+  const rerouteRef = useRef({ busy: false, last: 0, held: false })
 
   const [map, setMap] = useState(null)
   const [tab, setTab] = useState('map')
@@ -68,31 +129,51 @@ export default function App() {
   const [mode, setMode] = useState('bike')
   const [route, setRoute] = useState(null)
   const [routeBusy, setRouteBusy] = useState(false)
+  const [routeNonce, setRouteNonce] = useState(0)
   const [reports, setReports] = useState([])
   const [history, setHistory] = useState([])
+  const [alerts, setAlerts_] = useState([])
   const [rain, setRain] = useState(null)
+  const [rainEvent, setRainEvent] = useState(null)
   const [dem, setDem] = useState(null)
   const [water, setWater] = useState(0) // 0 to 1: share of the area's height range under water
   const [playing, setPlaying] = useState(false)
   const [showZones, setShowZones] = useState(true)
   const [is3D, setIs3D] = useState(false)
-  const [sim, setSim] = useState(false) // realistic 3D simulation view
-  const [heat, setHeat] = useState(false) // heat map of simulated flooding
+  const [sim, setSim] = useState(false)
+  const [heat, setHeat] = useState(false)
   const [routeWater, setRouteWater] = useState(0) // water level the current route was planned for
+  const [driveInfo, setDriveInfo] = useState(null)
+  const [speed, setSpeed] = useState(10)
+  const [paused, setPaused] = useState(false)
+  const [trips, setTrips] = useState(loadTrips)
+  const [replay, setReplay] = useState(null) // { data, h }
+  const [banner, setBanner] = useState(null) // drive status: { tone, text, auto? }
+  const [alarm, setAlarm] = useState(null) // new alert: { tone, text, alertId, auto? }
+  const [note, setNote] = useState('')
   const [msg, setMsg] = useState('')
   const [, setTick] = useState(0)
 
   const refresh = useCallback(() => {
     listReports()
-      .then(setReports)
+      .then((rows) => {
+        const before = new Set(reportsRef.current.map((r) => r.id))
+        const fresh = reportsRef.current.length ? rows.filter((r) => !before.has(r.id)) : []
+        if (fresh.length && tabRef.current !== 'activity') setNote(t('new.item', { label: sev(fresh[0].severity).label, place: fresh[0].place }))
+        setReports(rows)
+      })
       .catch((e) => setMsg(e.message))
     listHistory(720)
       .then(setHistory)
       .catch(() => {})
-    setTick((t) => t + 1)
+    setTick((x) => x + 1)
+  }, [])
+  const refreshAlerts = useCallback(() => {
+    listAlerts()
+      .then((rows) => setAlerts_([...rows]))
+      .catch((e) => setMsg(e.message))
   }, [])
 
-  // Sets a point, then fills in its street name when the lookup returns.
   const setNamed = useCallback((setter, p) => {
     setter(p)
     reverseGeocode(p).then((name) => {
@@ -106,13 +187,12 @@ export default function App() {
     m.on('click', (e) => {
       const which = pickRef.current
       if (!which) return
-      const p = { lat: e.lngLat.lat, lng: e.lngLat.lng }
-      setNamed({ pin: setPin, start: setStart, end: setEnd }[which], p)
+      setNamed({ pin: setPin, start: setStart, end: setEnd }[which], { lat: e.lngLat.lat, lng: e.lngLat.lng })
       setPick(null)
     })
-    const markers = markersRef.current
     return () => {
-      markers.clear()
+      driveRef.current?.stop()
+      driveRef.current = null
       setMap(null)
       m.remove()
     }
@@ -122,16 +202,25 @@ export default function App() {
     pickRef.current = pick
     if (map) map.getCanvas().style.cursor = pick ? 'crosshair' : ''
   }, [pick, map])
+  useEffect(() => {
+    tabRef.current = tab
+  }, [tab])
 
   useEffect(() => {
     refresh()
-    const unsubscribe = subscribe(refresh)
-    const timer = setInterval(refresh, 30000) // drops expired reports
+    refreshAlerts()
+    const offReports = subscribe(refresh)
+    const offAlerts = subscribeAlerts(refreshAlerts)
+    const timer = setInterval(() => {
+      refresh()
+      refreshAlerts()
+    }, 30000) // drops expired reports and alerts
     return () => {
-      unsubscribe()
+      offReports()
+      offAlerts()
       clearInterval(timer)
     }
-  }, [refresh])
+  }, [refresh, refreshAlerts])
 
   useEffect(() => {
     getRainAlert().then(setRain).catch(() => {})
@@ -139,35 +228,55 @@ export default function App() {
   }, [])
 
   // On heavy-rain days, start with some water showing until the user changes it.
+  // A change in the rain level is kept for the activity log.
   useEffect(() => {
-    if (rain && !waterTouched.current) setWater(RAIN_WATER[rain.level] ?? 0)
+    if (!rain) return
+    if (!waterTouched.current) setWater(RAIN_WATER[rain.level] ?? 0)
+    try {
+      const prev = JSON.parse(localStorage.getItem(RAIN_KEY))
+      const next = prev?.level === rain.level ? prev : { level: rain.level, at: new Date().toISOString(), changed: Boolean(prev) }
+      localStorage.setItem(RAIN_KEY, JSON.stringify(next))
+      setRainEvent(next.changed ? next : null) // only a change of level is news
+    } catch {
+      // storage blocked: no rain entry in the log
+    }
   }, [rain])
 
-  // Redraw flooded roads when the water level changes or new map tiles load.
-  // Updates are spaced at least 120 ms apart so the animation stays smooth.
+  // Flooded roads. Sampling the roads is the slow part and runs at most once a
+  // second while the map moves; a new water level only re-checks the samples.
   const waterRef = useRef(water)
   const floodUpdate = useRef(null)
   waterRef.current = water
   useEffect(() => {
     if (!map || !dem) return
-    let last = 0
+    let pieces = []
+    let dirty = true
+    let sampledAt = 0
     let timer
-    const update = () => {
-      last = performance.now()
-      setFloodData(map, floodedRoads(map, waterRef.current))
+    const draw = () => {
+      if (waterRef.current > 0 && dirty) {
+        pieces = sampleRoads(map)
+        dirty = false
+        sampledAt = performance.now()
+      }
+      setFloodData(map, floodLines(pieces, waterRef.current))
     }
-    const schedule = () => {
+    const schedule = (wait = 0) => {
       clearTimeout(timer)
-      timer = setTimeout(update, Math.max(0, 120 - (performance.now() - last)))
+      timer = setTimeout(draw, wait)
     }
-    const onData = (e) => e.sourceId === 'openmaptiles' && e.isSourceLoaded && schedule()
-    floodUpdate.current = schedule
+    const onChange = () => {
+      dirty = true
+      schedule(Math.max(250, 1000 - (performance.now() - sampledAt)))
+    }
+    const onData = (e) => e.sourceId === 'openmaptiles' && e.isSourceLoaded && onChange()
+    floodUpdate.current = () => schedule(40)
     schedule()
-    map.on('moveend', schedule)
+    map.on('moveend', onChange)
     map.on('sourcedata', onData)
     return () => {
       clearTimeout(timer)
-      map.off('moveend', schedule)
+      map.off('moveend', onChange)
       map.off('sourcedata', onData)
     }
   }, [map, dem])
@@ -181,21 +290,21 @@ export default function App() {
 
   // Re-plan the route once the water stops changing.
   useEffect(() => {
-    if (playing) return
-    const t = setTimeout(() => setRouteWater(Math.round(water * 100) / 100), 500)
-    return () => clearTimeout(t)
-  }, [water, playing])
+    if (playing || replay) return
+    const timer = setTimeout(() => setRouteWater(Math.round(water * 100) / 100), 500)
+    return () => clearTimeout(timer)
+  }, [water, playing, replay])
 
   // "Simulate" raises the water steadily over 8 seconds.
   useEffect(() => {
     if (!playing) return
     const from = water >= 0.6 ? 0 : water
-    const started = performance.now()
+    const began = performance.now()
     let frame
     const step = (now) => {
-      const t = Math.min(1, (now - started) / 8000)
-      setWater(from + (0.6 - from) * t)
-      if (t < 1) frame = requestAnimationFrame(step)
+      const k = Math.min(1, (now - began) / 8000)
+      setWater(from + (0.6 - from) * k)
+      if (k < 1) frame = requestAnimationFrame(step)
       else setPlaying(false)
     }
     frame = requestAnimationFrame(step)
@@ -229,18 +338,13 @@ export default function App() {
       const current = reportsRef.current.find((x) => x.id === r.id)
       openPopup(
         [r.lng, r.lat],
-        reportCard(current || r, {
-          active: Boolean(current),
-          nearbyCount: near(historyRef.current, r, SPOT_RADIUS),
-          onVote: vote,
-        }),
+        reportCard(current || r, { active: Boolean(current), nearbyCount: near(historyRef.current, r, SPOT_RADIUS), onVote: r.replay ? null : vote }),
       )
     },
     [openPopup, vote],
   )
 
   const zones = useMemo(() => floodZones.map((z) => ({ ...z, count: near(history, z, z.radius + 150) })), [history])
-
   useEffect(() => {
     historyRef.current = history
   }, [history])
@@ -249,23 +353,24 @@ export default function App() {
   useEffect(() => {
     if (!map) return
     const hover = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: 'hover-pop', maxWidth: '240px' })
-    const roadName = (point) => {
-      const box = [[point.x - 14, point.y - 14], [point.x + 14, point.y + 14]]
-      const named = map.queryRenderedFeatures(box).find((f) => f.sourceLayer === 'transportation_name' && f.properties.name)
-      return named ? named.properties['name:en'] || named.properties.name_en || named.properties.name : null
-    }
     const card = (e) => {
       const f = e.features?.[0]
-      return f && roadCard(roadName(e.point), f.properties.depth, f.properties.cls)
+      return f && roadCard(roadNameAt(map, e.point), f.properties.depth, f.properties.cls)
     }
+    let frame = 0
     const move = (e) => {
-      if (pickRef.current) return
-      const c = card(e)
-      if (!c) return
-      map.getCanvas().style.cursor = 'pointer'
-      hover.setLngLat(e.lngLat).setDOMContent(c).addTo(map)
+      if (pickRef.current || frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        const c = card(e)
+        if (!c) return
+        map.getCanvas().style.cursor = 'pointer'
+        hover.setLngLat(e.lngLat).setDOMContent(c).addTo(map)
+      })
     }
     const leave = () => {
+      cancelAnimationFrame(frame)
+      frame = 0
       if (!pickRef.current) map.getCanvas().style.cursor = ''
       hover.remove()
     }
@@ -278,7 +383,7 @@ export default function App() {
     map.on('mouseleave', 'road-water', leave)
     map.on('click', 'road-water', click)
     return () => {
-      hover.remove()
+      leave()
       map.off('mousemove', 'road-water', move)
       map.off('mouseleave', 'road-water', leave)
       map.off('click', 'road-water', click)
@@ -305,63 +410,346 @@ export default function App() {
     }
   }, [map, openPopup])
 
+  // Replay of Sept 2022: reports appear and clear in step with the real rainfall.
+  const replayReports = useMemo(() => {
+    if (!replay) return null
+    const { data, h } = replay
+    const now = Date.now()
+    return data.reports
+      .filter((r) => r.h <= h && h < r.h + (r.ttl ?? 3))
+      .map((r, i) => {
+        const observed = now - (h - r.h) * 3600e3
+        return {
+          id: `replay-${r.h}-${i}`,
+          lat: r.lat,
+          lng: r.lng,
+          severity: r.severity,
+          place: r.place,
+          replay: true,
+          confirmations: 0,
+          observed_at: new Date(observed).toISOString(),
+          created_at: new Date(observed).toISOString(),
+          expires_at: new Date(observed + (r.ttl ?? 3) * 3600e3).toISOString(),
+        }
+      })
+  }, [replay])
+  const shown = replayReports || reports
+
   // Report markers.
   useEffect(() => {
-    reportsRef.current = reports
-    if (!map) return
-    const markers = markersRef.current
-    const ids = new Set(reports.map((r) => r.id))
-    for (const [id, marker] of markers) {
-      if (!ids.has(id)) {
-        marker.remove()
-        markers.delete(id)
+    reportsRef.current = shown
+  }, [shown])
+  const reportItems = useMemo(() => shown.map((r) => ({ ...r, key: r.id })), [shown])
+  useMarkers(map, reportItems, (r) => {
+    const el = document.createElement('button')
+    el.type = 'button'
+    el.className = 'report-dot'
+    el.style.setProperty('--c', SEVERITY[r.severity].color)
+    el.setAttribute('aria-label', sev(r.severity).label)
+    el.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (!pickRef.current) showReport(r)
+    })
+    return el
+  })
+
+  // Alerts: drawn on the map, on the sensors, and announced when new.
+  const activeAlerts = useMemo(() => alerts.filter((a) => isActiveAlert(a)), [alerts])
+  useEffect(() => {
+    if (map) setAlerts(map, activeAlerts)
+  }, [map, activeAlerts])
+  useMarkers(
+    map,
+    useMemo(() => activeAlerts.filter((a) => a.kind === 'wire').map((a) => ({ key: a.id, lat: a.lat, lng: a.lng })), [activeAlerts]),
+    () => Object.assign(document.createElement('div'), { className: 'pulse' }),
+  )
+  const sensorItems = useMemo(
+    () =>
+      SENSORS.map((s) => {
+        const wire = activeAlerts.find((a) => a.sensor_id === s.id && a.kind === 'wire')
+        const wet = activeAlerts.find((a) => a.sensor_id === s.id && a.kind === 'water')
+        return { ...s, wire, wet, key: `${s.id}:${wire ? 'w' : wet ? 'r' : ''}` }
+      }),
+    [activeAlerts],
+  )
+  useMarkers(map, sensorItems, (s) => {
+    const el = document.createElement('button')
+    el.type = 'button'
+    el.className = `sensor${s.wire ? ' danger' : s.wet ? ' wet' : ''}`
+    el.setAttribute('aria-label', s.name)
+    el.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (pickRef.current) return
+      openPopup(
+        [s.lng, s.lat],
+        sensorCard(s, {
+          water: s.wet,
+          wire: s.wire,
+          cm: s.wire?.cm || s.wet?.cm || 0,
+          onWire: () => {
+            popupRef.current?.remove()
+            sendAlert({ kind: 'wire', lat: s.lat, lng: s.lng, place: s.name, sensorId: s.id }).catch((err) => setMsg(err.message))
+          },
+          onSafe: () => {
+            popupRef.current?.remove()
+            clearAlert(s.wire).catch((err) => setMsg(err.message))
+          },
+        }),
+      )
+    })
+    return el
+  })
+
+  const seenRef = useRef(null)
+  useEffect(() => {
+    if (seenRef.current) {
+      for (const a of activeAlerts) {
+        if (seenRef.current.has(a.id)) continue
+        if (a.kind === 'wire') {
+          setAlarm({ tone: 'danger', text: t('bn.wire', a.place || t('sensor.pole')), alertId: a.id })
+          buzz()
+        } else setAlarm({ tone: 'water', text: t('bn.water', { place: a.place || t('road.road'), cm: Math.round(a.cm) }), alertId: a.id, auto: 6000 })
       }
     }
-    for (const r of reports) {
-      if (markers.has(r.id)) continue
-      const el = document.createElement('button')
-      el.type = 'button'
-      el.className = 'report-dot'
-      el.style.setProperty('--c', SEVERITY[r.severity].color)
-      el.setAttribute('aria-label', `${SEVERITY[r.severity].label} report`)
-      el.addEventListener('click', (e) => {
-        e.stopPropagation()
-        if (!pickRef.current) showReport(r)
-      })
-      markers.set(r.id, new maplibregl.Marker({ element: el }).setLngLat([r.lng, r.lat]).addTo(map))
-    }
-  }, [map, reports, showReport])
+    seenRef.current = new Set(alerts.map((a) => a.id))
+    setAlarm((b) => (b && !activeAlerts.some((a) => a.id === b.alertId) ? null : b))
+  }, [alerts, activeAlerts])
+
+  useEffect(() => {
+    if (!banner?.auto) return
+    const timer = setTimeout(() => setBanner((b) => (b === banner ? null : b)), banner.auto)
+    return () => clearTimeout(timer)
+  }, [banner])
+  useEffect(() => {
+    if (!alarm?.auto) return
+    const timer = setTimeout(() => setAlarm((b) => (b === alarm ? null : b)), alarm.auto)
+    return () => clearTimeout(timer)
+  }, [alarm])
+  useEffect(() => {
+    if (!note) return
+    const timer = setTimeout(() => setNote(''), 4000)
+    return () => clearTimeout(timer)
+  }, [note])
 
   usePointMarker(map, pin, 'pt-pin')
   usePointMarker(map, start, 'pt-start')
   usePointMarker(map, end, 'pt-end')
 
-  // Routing: only reports that matter for the chosen vehicle are avoided.
-  const relevant = useMemo(() => reports.filter((r) => r.severity >= MODES[mode].minSeverity), [reports, mode])
-  const relevantKey = relevant.map((r) => r.id).sort().join(',')
+  // Routing. Hazards that matter for the vehicle decide when to re-plan.
+  const modeCfg = MODES[mode]
+  const planHazards = useMemo(() => buildHazards(shown, activeAlerts, true), [shown, activeAlerts])
+  const planRef = useRef(planHazards)
+  planRef.current = planHazards
+  const hazardKey = planHazards
+    .filter((h) => h.hard || h.cm >= modeCfg.avoidCm)
+    .map((h) => h.id)
+    .sort()
+    .join(',')
   useEffect(() => {
+    if (driveRef.current) return // while driving, the drive check re-plans
     if (!start || !end) return setRoute(null)
     let stale = false
     setRouteBusy(true)
-    const minSeverity = MODES[mode].minSeverity
-    // Water right at the start or end cannot be routed around, so it is not counted.
-    const awayFromEnds = (s) => distM(s, start) > 150 && distM(s, end) > 150
-    const floodAlong =
-      dem && routeWater > 0 ? (line) => floodSpotsAlong(line, routeWater, minSeverity).filter(awayFromEnds) : null
-    findRoute(start, end, relevant, floodAlong)
-      .then((r) => !stale && setRoute({ ...r, simulated: Boolean(floodAlong) }))
+    const w = dem ? routeWater : 0
+    findRoute(start, end, { hazards: planRef.current, water: w, mode: MODES[mode] })
+      .then((r) => !stale && setRoute({ ...r, simulated: w > 0 }))
       .catch((e) => !stale && (setRoute(null), setMsg(e.message)))
       .finally(() => !stale && setRouteBusy(false))
     return () => {
       stale = true
     }
-  }, [start?.lat, start?.lng, end?.lat, end?.lng, relevantKey, routeWater, mode, dem]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [start?.lat, start?.lng, end?.lat, end?.lng, hazardKey, routeWater, mode, dem, routeNonce]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!map) return
-    drawRoute(map, route)
-    setAvoidZones(map, route ? relevant : [])
+    drawRoute(map, route, !driveRef.current)
+    setAvoidZones(map, route ? shown.filter((r) => SEVERITY[r.severity].cm >= modeCfg.avoidCm) : [])
   }, [map, route]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Driving: every tick checks the road ahead; new water or danger re-plans
+  // the route from just ahead of the vehicle without stopping it.
+  const isKnown = (s) => knownRef.current.some((k) => (s.id && k.id === s.id) || (!s.id && distM(k, s) < KNOWN_M))
+  const reroute = async (reason) => {
+    const d = driveRef.current
+    const st = rerouteRef.current
+    if (!d || st.busy || performance.now() - st.last < 5000) return
+    st.busy = true
+    const blockAt = reason.m != null ? d.at + reason.m : null
+    if (blockAt != null) d.stopBefore(blockAt - 120) // never drive into it while the new route loads
+    setBanner({ tone: reason.kind === 'wire' ? 'danger' : 'water', text: reason.kind === 'wire' ? t('bn.wireAhead') : reason.kind === 'off' ? t('bn.offRoute') : t('bn.rising', reason.cm) })
+    const originAt = blockAt != null ? d.at + Math.max(0, Math.min(300, blockAt - d.at - 250)) : d.at
+    const o = d.pointAt(originAt)
+    const w = sim || replay ? waterRef.current : 0
+    try {
+      const r = await findRoute({ lat: o.lat, lng: o.lng }, end, { hazards: buildHazards(reportsRef.current, alerts, true), water: w, mode: modeCfg })
+      if (driveRef.current !== d) return
+      if (r.status === 'blocked' || r.status === 'wire') {
+        d.stopBefore((blockAt ?? d.at) - 200)
+        st.held = true
+        setBanner({ tone: 'danger', text: t('bn.stop') })
+        return
+      }
+      const oldRest = d.slice(d.at)
+      const coords = [...d.slice(d.at, Math.max(d.at, originAt)), ...r.safe.coords]
+      d.reroute(coords)
+      const hz = buildHazards(reportsRef.current, alerts, true)
+      const prof = profile(coords, hz, w, modeCfg.avoidCm, [end])
+      knownRef.current = prof.spots
+      const timed = (c) => ({ coords: c, km: lineM(c) / 1000, min: lineM(c) / d.mps / 60 })
+      setRoute({
+        ...r,
+        safe: { ...r.safe, ...timed(coords), prof },
+        fastest: { ...timed(oldRest), prof: profile(oldRest, hz, w, modeCfg.avoidCm, [end]) },
+        simulated: w > 0,
+      })
+      setBanner({ tone: 'info', text: r.status === 'wet' ? t('bn.least') : t('bn.rerouted'), auto: 4000 })
+    } catch (e) {
+      setMsg(e.message)
+      d.release()
+    } finally {
+      st.busy = false
+      st.last = performance.now()
+    }
+  }
+  tickRef.current = ({ at, leftM, leftMin, offRoute }) => {
+    const d = driveRef.current
+    if (!d) return
+    const w = sim || replay ? waterRef.current : 0
+    const prof = profile(d.slice(at, at + LOOK_M), buildHazards(reportsRef.current, alerts), w, modeCfg.avoidCm, [end])
+    const spot = prof.spots.find((s) => s.at > 40) // water under the vehicle cannot be avoided any more
+    const wireFirst = prof.hard && (!spot || prof.hard.at < spot.at)
+    const next = wireFirst ? { kind: 'wire', m: prof.hard.at, id: prof.hard.id } : spot ? { kind: 'water', cm: spot.cm, m: spot.at } : null
+    setDriveInfo((i) => i && { ...i, leftM, leftMin, next })
+    const st = rerouteRef.current
+    if (st.held && !next) {
+      st.held = false // the danger cleared: carry on
+      d.release()
+      setBanner(null)
+    }
+    if (offRoute) reroute({ kind: 'off' })
+    else if (wireFirst && !isKnown(prof.hard)) reroute(next)
+    else if (!wireFirst && spot && !isKnown(spot)) reroute(next)
+  }
+
+  const startDrive = (gps) => {
+    if (!map || !route) return
+    driveRef.current?.stop()
+    popupRef.current?.remove()
+    const d = createDrive(map, {
+      gps,
+      onTick: (info) => tickRef.current?.(info),
+      onEnd: () => setDriveInfo((i) => i && { ...i, arrived: true, next: null }),
+    })
+    driveRef.current = d
+    knownRef.current = route.safe.prof.spots
+    rerouteRef.current = { busy: false, last: 0, held: false }
+    d.setSpeed(speed)
+    d.start(route.safe.coords, route.safe.min)
+    setDriveInfo({ leftM: route.safe.km * 1000, leftMin: route.safe.min, next: null, gps })
+    setPaused(false)
+    drawRoute(map, route, false)
+  }
+  const stopDrive = () => {
+    driveRef.current?.stop()
+    driveRef.current = null
+    setDriveInfo(null)
+    setBanner(null)
+    setRouteNonce((n) => n + 1)
+    map?.easeTo({ pitch: sim || is3D ? 55 : 0, bearing: 0, zoom: 13.5, duration: 900, padding: viewPadding() })
+  }
+
+  // Demo triggers.
+  const raiseWater = () => {
+    const d = driveRef.current
+    if (!d || !map) return
+    const p = d.pointAt(Math.min(d.at + 600, d.total - 150))
+    sendAlert({ kind: 'water', lat: p.lat, lng: p.lng, cm: 60, place: roadNameAt(map, map.project([p.lng, p.lat])) || t('road.road') }).catch((e) => setMsg(e.message))
+  }
+  const liveWire = () => {
+    if (!map) return
+    const d = driveRef.current
+    let target = null
+    if (d && d.total - d.at > 600) {
+      const ahead = d.slice(d.at + 300, d.at + 2500)
+      const s = SENSORS.find((x) => distToLine(x.lat, x.lng, ahead) < 120)
+      if (s) target = { lat: s.lat, lng: s.lng, place: s.name, sensorId: s.id }
+      else {
+        const p = d.pointAt(d.at + Math.min(800, (d.total - d.at) / 2))
+        target = { lat: p.lat, lng: p.lng, place: roadNameAt(map, map.project([p.lng, p.lat])) || t('sensor.pole') }
+      }
+    } else {
+      const c = map.getCenter()
+      const s = SENSORS.reduce((a, b) => (distM(b, { lat: c.lat, lng: c.lng }) < distM(a, { lat: c.lat, lng: c.lng }) ? b : a))
+      target = { lat: s.lat, lng: s.lng, place: s.name, sensorId: s.id }
+      map.flyTo({ center: [s.lng, s.lat], zoom: Math.max(map.getZoom(), 14.5), padding: viewPadding(), duration: 900 })
+    }
+    sendAlert({ kind: 'wire', ...target }).catch((e) => setMsg(e.message))
+  }
+  const enterSim = () => {
+    if (sim || !map) return
+    setSim(true)
+    setSimulationView(map, true, is3D)
+  }
+  const startReplay = async () => {
+    const data = (await import('./data/sept2022.json')).default
+    waterTouched.current = true
+    setPlaying(false)
+    enterSim()
+    setReplay({ data, h: 0 })
+  }
+  useEffect(() => {
+    if (!replay?.data) return
+    const { hours } = replay.data
+    const peak = Math.max(...hours.map((_, i) => rain3h(hours, i))) || 1 // water peaks with the period's heaviest rain
+    const began = performance.now()
+    const id = setInterval(() => {
+      const h = ((performance.now() - began) / REPLAY_MS) * hours.length
+      if (h >= hours.length) {
+        setReplay(null)
+        setWater(0)
+        return
+      }
+      setReplay((r) => r && { ...r, h })
+      setWater((0.6 * rain3h(hours, h)) / peak)
+    }, 100)
+    return () => clearInterval(id)
+  }, [replay?.data]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Saved trips: status from live hazards; a notification when new danger
+  // lands on one while the app is in the background.
+  const liveHazards = useMemo(() => buildHazards(reports, activeAlerts, true), [reports, activeAlerts])
+  const tripStatus = (trip) => {
+    const prof = profile(trip.coords, liveHazards, 0, MODES[trip.mode].avoidCm, [trip.start, trip.end])
+    if (prof.hard) return { tone: 'danger', text: t('trip.wire'), keys: [prof.hard.id] }
+    const keys = prof.spots.map((s) => s.id).filter(Boolean)
+    if (prof.spots.some((s) => s.kind === 'water')) return { tone: 'danger', text: t('trip.water'), keys }
+    const n = prof.spots.filter((s) => s.kind === 'report').length
+    if (n) return { tone: 'warn', text: t('trip.reports', n), keys }
+    if (rain?.level === 'Orange' || rain?.level === 'Red') return { tone: 'warn', text: t('trip.rain'), keys }
+    return { tone: 'ok', text: t('trip.clear'), keys }
+  }
+  const notified = useRef(null)
+  useEffect(() => {
+    const seen = notified.current
+    const now = new Set()
+    for (const trip of trips) {
+      const st = tripStatus(trip)
+      for (const k of st.keys) {
+        now.add(`${trip.id}:${k}`)
+        if (seen && !seen.has(`${trip.id}:${k}`) && document.hidden && window.Notification?.permission === 'granted') {
+          new Notification('Jaldrishti', { body: `${trip.name}: ${st.text}`, tag: `${trip.id}:${k}` })
+        }
+      }
+    }
+    notified.current = now
+  }, [liveHazards, trips]) // eslint-disable-line react-hooks/exhaustive-deps
+  const saveTrip = (name) => {
+    if (!route || !start || !end) return
+    const next = [{ id: crypto.randomUUID(), name, start, end, mode, coords: thin(route.safe.coords) }, ...trips].slice(0, 5)
+    setTrips(next)
+    saveTrips(next)
+    if (window.Notification?.permission === 'default') Notification.requestPermission()
+  }
 
   const useGps = async (setter) => {
     setMsg('')
@@ -379,6 +767,8 @@ export default function App() {
   }
 
   const focus = (p, zoom = 15) => map?.flyTo({ center: [p.lng, p.lat], zoom: Math.max(map.getZoom(), zoom), padding: viewPadding(), duration: 900 })
+  const hourCount = history.filter((h) => Date.now() - Date.parse(h.created_at) < 3600e3).length
+  const [, setLangTick] = useState(0)
 
   let panel
   if (reporting) {
@@ -412,21 +802,39 @@ export default function App() {
         onPick={setPick}
         onGps={(which) => useGps(which === 'start' ? setStart : setEnd)}
         onClear={() => {
+          if (driveRef.current) stopDrive()
           setStart(null)
           setEnd(null)
         }}
+        onDrive={startDrive}
+        driving={Boolean(driveInfo)}
+        trips={trips}
+        tripStatus={tripStatus}
+        onTrip={(trip) => {
+          setStart(trip.start)
+          setEnd(trip.end)
+          setMode(trip.mode)
+        }}
+        onRemoveTrip={(id) => {
+          const next = trips.filter((x) => x.id !== id)
+          setTrips(next)
+          saveTrips(next)
+        }}
+        onSave={saveTrip}
       />
     )
   } else if (tab === 'activity') {
     panel = (
       <ActivityPanel
         history={history}
+        alerts={alerts}
+        rainEvent={rainEvent}
         activeIds={new Set(reports.map((r) => r.id))}
         zones={zones}
         onSelect={(h) => {
           if (isNarrow()) setTab('map')
           focus(h)
-          showReport(h)
+          if (h.severity && !h.kind) showReport(h)
         }}
         onSelectZone={(z) => {
           if (isNarrow()) setTab('map')
@@ -440,6 +848,7 @@ export default function App() {
       <MapPanel
         rain={rain}
         activeCount={reports.length}
+        hourCount={hourCount}
         live={live}
         onReport={() => {
           setReporting(true)
@@ -453,17 +862,17 @@ export default function App() {
         onWater={(v) => {
           waterTouched.current = true
           setPlaying(false)
+          setReplay(null)
           setWater(v)
         }}
         onPlay={() => {
           waterTouched.current = true
+          setReplay(null)
           if (sim || !map) return setPlaying((p) => !p)
-          // First switch to the realistic view, then let the water rise once
-          // the camera has settled.
-          setSim(true)
+          // First switch to the realistic view, then let the water rise once the camera has settled.
           setPlaying(false)
           setWater(0)
-          setSimulationView(map, true, is3D)
+          enterSim()
           setTimeout(() => setPlaying(true), 2200)
         }}
         sim={sim}
@@ -471,6 +880,7 @@ export default function App() {
         onHeat={setHeat}
         onExitSim={() => {
           setPlaying(false)
+          setReplay(null)
           setSim(false)
           setWater(0)
           if (map) setSimulationView(map, false, is3D)
@@ -480,26 +890,35 @@ export default function App() {
           setIs3D(on)
           if (map) set3D(map, on)
         }}
+        onLang={(l) => {
+          setLang(l)
+          if (map) setMapLang(map, l)
+          setLangTick((x) => x + 1)
+        }}
       />
     )
   }
 
+  const replayDate = replay
+    ? new Date(Date.parse(replay.data.start) + replay.h * 3600e3).toLocaleString(getLang() === 'kn' ? 'kn-IN' : 'en-IN', { day: 'numeric', month: 'short', hour: 'numeric' })
+    : null
+
   return (
-    <div className="app">
+    <div className={`app${driveInfo ? ' driving' : ''}`}>
       <nav className="rail" aria-label="Sections">
         <span className="logo" aria-hidden="true">
           <Droplet size={20} />
         </span>
-        {TABS.map((t) => (
+        {TABS.map((tb) => (
           <button
             type="button"
-            key={t.id}
-            className={`tab${tab === t.id && !reporting ? ' on' : ''}`}
-            aria-current={tab === t.id ? 'page' : undefined}
-            onClick={() => goTab(t.id)}
+            key={tb.id}
+            className={`tab${tab === tb.id && !reporting ? ' on' : ''}`}
+            aria-current={tab === tb.id ? 'page' : undefined}
+            onClick={() => goTab(tb.id)}
           >
-            <t.icon size={20} strokeWidth={1.75} />
-            <span>{t.label}</span>
+            <tb.icon size={20} strokeWidth={1.75} />
+            <span>{t(`tab.${tb.id}`)}</span>
           </button>
         ))}
       </nav>
@@ -508,21 +927,66 @@ export default function App() {
 
       <main className="map-wrap">
         <div ref={boxRef} className="map" />
-        {pick && (
-          <div className="map-banner" role="status">
-            <span>Tap the map to choose {PICK_LABEL[pick]}</span>
-            <button type="button" className="icon-btn" aria-label="Cancel" onClick={() => setPick(null)}>
-              <X size={16} />
-            </button>
-          </div>
-        )}
-        {msg && (
-          <div className="toast" role="alert">
-            <span>{msg}</span>
-            <button type="button" className="icon-btn" aria-label="Dismiss" onClick={() => setMsg('')}>
-              <X size={16} />
-            </button>
-          </div>
+        <DemoMenu driving={Boolean(driveInfo)} onReplay={startReplay} onRaise={raiseWater} onWire={liveWire} onClear={() => clearDemoAlerts(alerts).catch((e) => setMsg(e.message))} />
+        <div className="map-top">
+          {[alarm, banner].map(
+            (b, i) =>
+              b && (
+                <div key={i} className={`alert-bar ${b.tone}`} role="alert">
+                  {b.tone === 'danger' && <Zap size={16} />}
+                  <span>{b.text}</span>
+                  <button type="button" className="icon-btn" aria-label={t('dismiss')} onClick={() => (i ? setBanner(null) : setAlarm(null))}>
+                    <X size={16} />
+                  </button>
+                </div>
+              ),
+          )}
+          {replay && (
+            <div className="map-banner" role="status">
+              <span>{t('rp.at', { date: replayDate, mm: Math.round(rain3h(replay.data.hours, replay.h)) })}</span>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => (setReplay(null), setWater(0))}>
+                {t('rp.stop')}
+              </button>
+            </div>
+          )}
+          {pick && (
+            <div className="map-banner" role="status">
+              <span>{t(`pick.${pick}`)}</span>
+              <button type="button" className="icon-btn" aria-label={t('cancel')} onClick={() => setPick(null)}>
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          {msg && (
+            <div className="toast" role="alert">
+              <span>{msg}</span>
+              <button type="button" className="icon-btn" aria-label={t('dismiss')} onClick={() => setMsg('')}>
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          {note && !msg && (
+            <div className="toast note" role="status">
+              <span>{note}</span>
+            </div>
+          )}
+        </div>
+        {driveInfo && (
+          <DriveHud
+            info={driveInfo}
+            speed={speed}
+            paused={paused}
+            gps={driveInfo.gps}
+            onSpeed={(x) => {
+              setSpeed(x)
+              driveRef.current?.setSpeed(x)
+            }}
+            onPause={() => {
+              setPaused((p) => !p)
+              driveRef.current?.setPaused(!paused)
+            }}
+            onStop={stopDrive}
+          />
         )}
       </main>
     </div>

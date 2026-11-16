@@ -1,99 +1,53 @@
 # Jaldrishti plan
 
-What we build next, in order. Tomorrow covers parts 1 to 3; part 4 is the longer roadmap.
+What is built, and what comes next.
 
-Today the app has: live citizen reports with photos, depth levels and auto-expiry; safer routes for two-wheelers and cars that avoid reports and simulated flooding; an activity log with spot history; and a 3D flood simulation that shows water on roads, depth on hover, and a heat map.
+## Built
 
----
+- **Reports**: live citizen reports with photos, depth levels (cm and inches), auto-expiry, "Still flooded" and "Cleared" votes.
+- **Routing**: steers around reports, sensor alerts and simulated flooding, separately for two-wheelers and cars. When no route is dry, it picks the route with the least water (shallowest deepest point, then the least water overall), and says when a vehicle cannot pass.
+- **Drive simulation**: a vehicle follows the route with the camera behind it, at 1×, 5× or 10×, or follows the device's real GPS.
+- **Live rerouting**: while driving, the road 2 km ahead is checked every quarter second. New water or danger re-plans the route from just ahead of the vehicle without stopping it; if there is no way around, it stops 200 m short and waits.
+- **Sensors and live-wire alerts**: six simulated water-level sensors. Electricity in the water creates a 150 m danger zone that every route avoids, a full-width alert, vibration and a tone, on every open device.
+- **Activity**: a live log of reports, votes, water and electricity alerts and rain-level changes, with filters (last hour, today, 7 days).
+- **Saved trips**: up to five trips in the Route tab, each with a live status line, and a notification when danger lands on one while the app is in the background.
+- **Demo data**: `scripts/seed-demo.mjs` generates reports from real hourly rainfall (Open-Meteo archive). In-app "Replay Sept 2022" plays the Aug–Sept 2022 floods in 60 seconds.
+- **Kannada**: the whole app, alerts and map labels switch between English and Kannada.
+- **Flood simulation**: water on roads by ground height, depth on hover, heat map. Changing the water level costs about 1 ms; roads are re-sampled at most once a second while the map moves.
 
-## 1. Track my daily route
+## Next
 
-**Goal:** a user saves the trips they make every day and hears about flooding on them without opening the map.
+### 1. Predict waterlogging (most important)
+- Join every report with the rainfall at that hour and place (Open-Meteo history, KSNDMC rain gauges).
+- Start simple: a rain threshold per spot ("this underpass floods above about 35 mm in an hour"), learned from reports.
+- Then a model per road stretch using how low it sits, distance to lakes and drains, built-up ground, past flooding, and rain over the last 3 and 24 hours.
+- Use the hourly forecast to warn before anyone reports: "Bellandur ORR: likely knee-deep around 7 pm". Saved trips get the warning first.
+- Test on whole rain events the model has not seen; report floods caught and false alarms.
 
-**Build:**
-- A new **Saved** tab (fourth tab) listing saved places (Home, Office) and saved trips (Home → Office).
-- "Save this route" button on the Route tab after a route is found. Store the start, end, vehicle and a name.
-- For each saved trip, show a status line: "Clear", "1 report on your route", or "Heavy rain expected, 2 roads may flood" (from the rain forecast and the simulation).
-- Optional time window per trip ("weekdays, 8–10 am") so the app checks it before the user leaves.
-- Browser notification when a new report lands on a saved trip (Notifications API; ask permission only after the user saves a trip).
+### 2. Real sensor pilot
+- 20 nodes at the worst spots in Bellandur and Mahadevapura, about ₹1–1.5 lakh. Details: [docs/bengaluru-deployment.md](docs/bengaluru-deployment.md).
+- Show sensors as offline when they miss heartbeats.
+- BESCOM fault data for electrical danger.
 
-**Storage:** on the device first (localStorage), so no sign-in is needed. Move to Supabase with phone sign-in later (part 4).
-
-**Done when:** a saved Home → Office trip shows "1 report on your route" within a few seconds of someone reporting on it, and a notification fires if the app is open in the background.
-
-**Files:** new `src/components/SavedPanel.jsx`, `src/lib/saved.js`; small changes in `App.jsx` (tab) and `RoutePanel.jsx` (save button).
-
----
-
-## 2. Live tracking of logs
-
-**Goal:** the Activity tab feels live, and anyone can see what has happened during a rain event as it unfolds.
-
-**Build:**
-- New reports, confirmations and clears appear at the top of Activity instantly (Supabase realtime is already wired; add a short highlight animation and a "New" badge).
-- A small toast on the map when a report arrives while you are looking at another tab ("New: knee-deep at Bellandur ORR").
-- Log more event types, not just reports: "Still flooded" votes, "Cleared" votes, and the rain level changing (Green → Orange).
-- A live counter in the Map tab: "3 reports in the last hour".
-- Filters on Activity: Last hour / Today / 7 days, and by depth.
-
-**Database:** add an `events` table (`id, type, report_id, severity, place, created_at`) written by the existing vote functions, plus a `report_events(hours)` function like `report_history`.
-
-**Done when:** two browsers are open; a report or vote in one shows in the other's Activity tab within 2 seconds, with the right label.
-
-**Files:** `supabase/migrations/003_events.sql`, `src/lib/store.js`, `src/components/ActivityPanel.jsx`.
-
----
-
-## 3. Dummy dataset
-
-**Goal:** realistic demo data so the activity log, spot history, heat map and routing look like a real monsoon, without passing fake data off as real.
-
-**Build:**
-- A script `scripts/seed-demo.mjs` that generates about 30 days of reports for Bellandur:
-  - more reports on rainy days (use Open-Meteo **historical** rainfall for Sept 2022 or May 2025);
-  - placed on low-lying roads (use `depthAt` from `src/lib/flood.js`) and near the known flood-prone spots;
-  - depth based on how low the road is and how much it rained;
-  - realistic times (clusters in the evening rain), confirmations and clears.
-- Mark every generated row with `is_demo = true` (new column), and show "Demo data" in the app when demo rows are on screen.
-- A "Replay Sept 2022" button: plays the seeded reports in order over 60 seconds, with the simulation water rising to match the rainfall.
-- A one-line command to remove it all: `delete from reports where is_demo`.
-
-**Done when:** `node scripts/seed-demo.mjs` fills the database, the heat map and "Often flooded" list look plausible, and the demo badge shows.
-
-**Files:** `scripts/seed-demo.mjs`, `supabase/migrations/004_demo.sql`, small changes in `ActivityPanel.jsx` and `MapPanel.jsx`.
-
----
-
-## 4. Future plans
-
-**Better flood model (most important)**
-- Today's simulation uses ground height only (about 20 m detail), so it shows which roads flood first, not true depths.
-- Next: learn **per-spot thresholds** from reports joined with rainfall ("this underpass floods above ~35 mm/hour"), then warn before anyone reports.
-- Add drains, lakes and past flood records (BBMP flood-prone list, Sentinel-1 radar flood maps) as model inputs.
-
-**Reaching people**
-- Push notifications (installable app) and a WhatsApp bot: "Is Silk Board flooded?".
-- Kannada throughout the app, not just the rain line.
+### 3. Reaching people
+- Installable app with push notifications (works when the app is closed, unlike today's browser notifications).
+- WhatsApp bot: "Is Silk Board flooded?"
 - First-time intro: three short screens and "save your home".
 
-**Trust**
-- Phone sign-in (optional) with reporter reputation; reports from trusted reporters show first.
-- Photo moderation and blurring faces and number plates (India's DPDP Act).
+### 4. Trust
+- Optional phone sign-in with reporter reputation; trusted reports show first.
+- Photo moderation, and blurring faces and number plates (India's DPDP Act).
+- Limit how often one device can trigger demo alerts in production (today: at most 30 demo alerts in 10 minutes across everyone).
 
-**Getting data in (cold start)**
-- Pilot with 2–3 Bellandur Resident Welfare Associations and a delivery-rider group before the May 2027 pre-monsoon rains.
-- Pull public sources: BBMP and traffic police waterlogging updates, KSNDMC.
-
-**Scale and cost**
-- Self-host routing (Valhalla or OSRM) when OpenRouteService's free limit (about 2,000 routes a day) is not enough.
-- Deploy on Vercel with a public link; add basic usage numbers (reports per rain event, time from first report to alert).
+### 5. Scale and cost
+- Self-host routing (Valhalla or OSRM) when OpenRouteService's free limit (about 2,000 routes a day) is not enough. Rerouting while driving uses 1–3 requests each time.
 - Expand from Bellandur to more of Bengaluru, then other cities by swapping the area and boundary data.
 
----
+## Known limitations
 
-## Known limitations today
-
-- The flood simulation is an illustration from ground height, not a forecast. Depths are approximate.
-- Flood-prone spots in `src/data/floodZones.js` are approximate placeholders, not the official BBMP list.
-- Routing makes up to four OpenRouteService requests per route while the simulation is on, which uses the free quota faster.
-- Road names on hover come from map labels, so unnamed or unlabelled roads show "Road".
+- The flood simulation is an illustration from ground height (about 20 m detail), not a forecast.
+- Flood-prone spots, sensor sites and low-lying road points are approximate placeholders, not the official BBMP list.
+- The rainfall archive is a ~10 km average and smooths out local cloudbursts, so the demo data scales rain against each period's own peak. Replay shows the archive's real mm values.
+- Without migration 003, alerts still reach other open devices through a realtime channel, but they are not stored and disappear on reload.
+- Kannada text needs a review by a fluent speaker.
+- Road names on hover come from map labels; unlabelled roads show "Road".

@@ -3,6 +3,8 @@
 import maplibregl from 'maplibre-gl'
 import { floodZones } from '../data/floodZones.js'
 import { AVOID_RADIUS, circleRing } from './geo.js'
+import { WIRE_RADIUS } from './hazards.js'
+import { getLang } from './i18n.js'
 
 export const AREA = {
   name: 'Bellandur & Outer Ring Road',
@@ -21,9 +23,9 @@ const STYLE = {
   sim: 'https://tiles.openfreemap.org/styles/dark',
 }
 const VALLEY = { center: [77.685, 12.932], zoom: 14, pitch: 62, bearing: -18 }
-const CUSTOM_SOURCES = ['dem', 'zones', 'avoid', 'route-fast', 'route-safe', 'road-water', 'flood-heat']
+const CUSTOM_SOURCES = ['dem', 'zones', 'alerts', 'avoid', 'route-fast', 'route-safe', 'route-wet', 'route-done', 'road-water', 'flood-heat']
 const BELOW_LABELS = ['flood-heat', 'road-water-glow', 'road-water', 'buildings-3d']
-const ABOVE_LABELS = ['zones-fill', 'zones-line', 'avoid-fill', 'route-fast', 'route-safe-casing', 'route-safe']
+const ABOVE_LABELS = ['zones-fill', 'zones-line', 'alerts-fill', 'alerts-line', 'avoid-fill', 'route-fast', 'route-safe-casing', 'route-safe', 'route-wet', 'route-done']
 let simOn = false
 
 const DEM_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'
@@ -145,6 +147,11 @@ export function createScene(container, onReady) {
     map.addLayer({ id: 'zones-fill', type: 'fill', source: 'zones', paint: { 'fill-color': css('--zone'), 'fill-opacity': 0.1 } })
     map.addLayer({ id: 'zones-line', type: 'line', source: 'zones', paint: { 'line-color': css('--zone'), 'line-width': 1, 'line-opacity': 0.6 } })
 
+    // Water and electricity alerts, drawn at their real radius.
+    map.addSource('alerts', { type: 'geojson', data: empty })
+    map.addLayer({ id: 'alerts-fill', type: 'fill', source: 'alerts', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.22 } })
+    map.addLayer({ id: 'alerts-line', type: 'line', source: 'alerts', paint: { 'line-color': ['get', 'color'], 'line-width': 1.5 } })
+
     // Area the route is steering around, shown only while a route is on screen.
     map.addSource('avoid', { type: 'geojson', data: empty })
     map.addLayer({ id: 'avoid-fill', type: 'fill', source: 'avoid', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.15 } })
@@ -155,14 +162,20 @@ export function createScene(container, onReady) {
     map.addLayer({ id: 'route-fast', type: 'line', source: 'route-fast', layout: round, paint: { 'line-color': css('--route-alt'), 'line-width': 4, 'line-dasharray': [1, 1.5] } })
     map.addLayer({ id: 'route-safe-casing', type: 'line', source: 'route-safe', layout: round, paint: { 'line-color': '#ffffff', 'line-width': 9 } })
     map.addLayer({ id: 'route-safe', type: 'line', source: 'route-safe', layout: round, paint: { 'line-color': css('--route'), 'line-width': 5 } })
+    // Wet stretches on the chosen route, and the part already driven.
+    map.addSource('route-wet', { type: 'geojson', data: empty })
+    map.addSource('route-done', { type: 'geojson', data: empty })
+    map.addLayer({ id: 'route-wet', type: 'line', source: 'route-wet', layout: round, paint: { 'line-color': css('--flood-3'), 'line-width': 5 } })
+    map.addLayer({ id: 'route-done', type: 'line', source: 'route-done', layout: round, paint: { 'line-color': css('--route-alt'), 'line-width': 5 } })
 
     onReady(map)
   })
 
+  map.once('style.load', () => setMapLang(map, getLang()))
   return map
 }
 
-// Draws the flooded roads and the heat map points from floodedRoads().
+// Draws the flooded roads and the heat map points from floodLines().
 export function setFloodData(map, { lines, points }) {
   if (!map.style) return
   map.getSource('road-water')?.setData({ type: 'FeatureCollection', features: lines })
@@ -267,6 +280,8 @@ export function setSimulationView(map, sim, is3D) {
   })
   map.once('style.load', () => {
     applyLook(map, sim)
+    labels.clear()
+    setMapLang(map, getLang())
     if (sim) {
       map.easeTo({ ...VALLEY, padding: viewPadding(), duration: 2500, essential: true })
       map.once('moveend', () => aimAtGround(map, map.getCenter()))
@@ -288,19 +303,57 @@ export function setAvoidZones(map, reports) {
   })
 }
 
-export function drawRoute(map, route) {
+// Road name at a point on screen, from the map's own labels.
+export function roadNameAt(map, point) {
+  const box = [[point.x - 14, point.y - 14], [point.x + 14, point.y + 14]]
+  const f = map.queryRenderedFeatures(box).find((x) => x.sourceLayer === 'transportation_name' && x.properties.name)
+  if (!f) return null
+  const p = f.properties
+  return (getLang() === 'kn' && p['name:kn']) || p['name:en'] || p.name_en || p.name
+}
+
+// Map labels in Kannada where OpenStreetMap has a Kannada name.
+const labels = new Map() // layer id -> original label expression
+export function setMapLang(map, lang) {
+  if (!map.style) return
+  for (const l of map.getStyle().layers) {
+    if (l.type !== 'symbol' || !l.layout?.['text-field']) continue
+    if (!labels.has(l.id)) labels.set(l.id, l.layout['text-field'])
+    map.setLayoutProperty(l.id, 'text-field', lang === 'kn' ? ['coalesce', ['get', 'name:kn'], labels.get(l.id)] : labels.get(l.id))
+  }
+}
+
+export function setAlerts(map, alerts) {
+  if (!map.style) return
+  map.getSource('alerts')?.setData({
+    type: 'FeatureCollection',
+    features: alerts.map((a) => ({
+      type: 'Feature',
+      properties: { color: css(a.kind === 'wire' ? '--sev-3' : '--flood-2') },
+      geometry: { type: 'Polygon', coordinates: [circleRing(a.lat, a.lng, a.kind === 'wire' ? WIRE_RADIUS : 100, 32)] },
+    })),
+  })
+}
+
+// fit: zoom to the route (off while driving, so the camera stays behind the vehicle).
+export function drawRoute(map, route, fit = true) {
   if (!map.style) return
   const safe = map.getSource('route-safe')
   const fast = map.getSource('route-fast')
   if (!safe || !fast) return
+  const wet = map.getSource('route-wet')
   if (!route) {
     safe.setData(empty)
     fast.setData(empty)
+    wet?.setData(empty)
     return
   }
-  map.setPaintProperty('route-safe', 'line-color', route.safe.hits ? css('--sev-3') : routeColor())
+  const bad = route.status === 'blocked' || route.status === 'wire'
+  map.setPaintProperty('route-safe', 'line-color', bad ? css('--sev-3') : routeColor())
   fast.setData(route.fastest ? lineFeature(route.fastest.coords) : empty)
   safe.setData(lineFeature(route.safe.coords))
+  wet?.setData({ type: 'Feature', geometry: { type: 'MultiLineString', coordinates: route.safe.prof.wet } })
+  if (!fit) return
 
   const all = route.fastest ? route.safe.coords.concat(route.fastest.coords) : route.safe.coords
   const bounds = all.reduce((b, [lat, lng]) => b.extend([lng, lat]), new maplibregl.LngLatBounds())

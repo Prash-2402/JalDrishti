@@ -97,80 +97,76 @@ function groundAt(lng, lat) {
   return grid.data[y * grid.W + x]
 }
 
+const cmBelow = (metres) => {
+  const cm = Math.min(MAX_CM, Math.round(metres * CM_PER_M))
+  return cm >= MIN_CM ? cm : 0
+}
+const waterLine = (water) => model.base + water * model.span
+
 // Simulated water depth in cm at a point. water is the slider value, 0 to 1.
 export function depthAt(lng, lat, water) {
   if (!model || water <= 0) return 0
   const ground = groundAt(lng, lat)
-  if (Number.isNaN(ground)) return 0
-  const below = model.base + water * model.span - ground
-  const cm = Math.min(MAX_CM, Math.round(below * CM_PER_M))
-  return cm >= MIN_CM ? cm : 0
+  return Number.isNaN(ground) ? 0 : cmBelow(waterLine(water) - ground)
 }
 
-// Report level for a depth: 0 dry, 1 ankle, 2 knee, 3 waist.
-export const severityFor = (cm) => (cm >= 60 ? 3 : cm >= 30 ? 2 : cm >= MIN_CM ? 1 : 0)
-
-// Flooded stretches of every road currently loaded on the map, as lines (for
-// drawing and hover) and points (for the heat map).
-export function floodedRoads(map, water) {
-  const lines = []
-  const points = []
-  if (!model || water <= 0 || !map.style || !map.getSource('openmaptiles')) return { lines, points }
-  const feats = map.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' })
-  for (const f of feats) {
+// Every road on the map cut into ~40 m pieces, each with its ground height.
+// This is the slow part, so it runs only when the map moves or new tiles
+// load; changing the water level reuses it (see floodLines).
+export function sampleRoads(map) {
+  const pieces = []
+  if (!model || !map.style || !map.getSource('openmaptiles')) return pieces
+  for (const f of map.querySourceFeatures('openmaptiles', { sourceLayer: 'transportation' })) {
     const p = f.properties
     if (!ROADS.has(p.class) || p.brunnel === 'bridge') continue // bridges stay dry
-    const parts = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : []
+    const g = f.geometry
+    const parts = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? g.coordinates : []
     for (const coords of parts) {
-      let run = null
-      const close = () => {
-        if (run && run.coords.length > 1) lines.push({ type: 'Feature', properties: { depth: run.depth, cls: p.class }, geometry: { type: 'LineString', coordinates: run.coords } })
-        run = null
-      }
+      let first = true
       for (let i = 0; i < coords.length - 1; i++) {
         const [ax, ay] = coords[i]
         const [bx, by] = coords[i + 1]
         const n = Math.max(1, Math.ceil(distM({ lng: ax, lat: ay }, { lng: bx, lat: by }) / STEP_M))
         for (let k = 0; k < n; k++) {
-          const from = [ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n]
-          const to = [ax + ((bx - ax) * (k + 1)) / n, ay + ((by - ay) * (k + 1)) / n]
-          const depth = depthAt((from[0] + to[0]) / 2, (from[1] + to[1]) / 2, water)
-          if (!depth) {
-            close()
-            continue
-          }
-          points.push({ type: 'Feature', properties: { w: depth / MAX_CM }, geometry: { type: 'Point', coordinates: from } })
-          const bucket = Math.round(depth / 10) * 10
-          if (run && run.depth === bucket) run.coords.push(to)
-          else {
-            close()
-            run = { depth: bucket, coords: [from, to] }
-          }
+          const a = [ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n]
+          const b = [ax + ((bx - ax) * (k + 1)) / n, ay + ((by - ay) * (k + 1)) / n]
+          const ground = groundAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+          if (!Number.isNaN(ground)) pieces.push({ a, b, ground, cls: p.class, first })
+          first = false
         }
       }
-      close()
     }
   }
-  return { lines, points }
+  return pieces
 }
 
-// Flooded spots along a route (a list of [lat, lng]), at least minSeverity
-// deep, one spot every ~80 m of flooded road. Used to steer routes around them.
-export function floodSpotsAlong(line, water, minSeverity) {
-  const spots = []
-  if (!model || water <= 0) return spots
-  let last = null
-  for (let i = 0; i < line.length - 1; i++) {
-    const a = { lat: line[i][0], lng: line[i][1] }
-    const b = { lat: line[i + 1][0], lng: line[i + 1][1] }
-    const n = Math.max(1, Math.ceil(distM(a, b) / 25))
-    for (let k = 0; k < n; k++) {
-      const p = { lat: a.lat + ((b.lat - a.lat) * k) / n, lng: a.lng + ((b.lng - a.lng) * k) / n }
-      const sev = severityFor(depthAt(p.lng, p.lat, water))
-      if (sev < minSeverity) continue
-      if (last && distM(last, p) < 80) last.severity = Math.max(last.severity, sev)
-      else spots.push((last = { ...p, severity: sev, flooded: true }))
+// Flooded stretches for a water level, as lines (drawing and hover) and
+// points (heat map). Cheap: only compares stored heights with the water line.
+export function floodLines(pieces, water) {
+  const lines = []
+  const points = []
+  if (!model || water <= 0) return { lines, points }
+  const line = waterLine(water)
+  let run = null
+  const close = () => {
+    if (run) lines.push({ type: 'Feature', properties: { depth: run.depth, cls: run.cls }, geometry: { type: 'LineString', coordinates: run.coords } })
+    run = null
+  }
+  for (const p of pieces) {
+    if (p.first) close()
+    const cm = cmBelow(line - p.ground)
+    if (!cm) {
+      close()
+      continue
+    }
+    points.push({ type: 'Feature', properties: { w: cm / MAX_CM }, geometry: { type: 'Point', coordinates: p.a } })
+    const depth = Math.round(cm / 10) * 10
+    if (run && run.depth === depth) run.coords.push(p.b)
+    else {
+      close()
+      run = { depth, cls: p.cls, coords: [p.a, p.b] }
     }
   }
-  return spots
+  close()
+  return { lines, points }
 }

@@ -1,53 +1,60 @@
 import { Layers, Pause, Play, Plus } from 'lucide-react'
-import { AREA, isNarrow } from '../lib/scene.js'
-import { SEVERITY } from '../lib/severity.js'
-import { Switch } from './ui.jsx'
+import { getLang, t } from '../lib/i18n.js'
+import { isNarrow } from '../lib/scene.js'
+import { LEVELS, sev } from '../lib/severity.js'
+import { Segmented, Switch } from './ui.jsx'
 
 const RAIN_DOT = { Green: 'var(--ok)', Yellow: 'var(--sev-1)', Orange: 'var(--sev-2)', Red: 'var(--sev-3)' }
-
-// Plain-words name for a level on the simulation slider.
-const waterLabel = (w) =>
-  w <= 0 ? 'No water' : w < 0.2 ? 'Light rain' : w < 0.4 ? 'Heavy rain' : w < 0.7 ? 'Very heavy rain' : 'Extreme rain'
+const waterStep = (w) => (w <= 0 ? 0 : w < 0.2 ? 1 : w < 0.4 ? 2 : w < 0.7 ? 3 : 4)
 
 export default function MapPanel({
-  rain, activeCount, live, onReport, showZones, onZones, water, playing, ready, onWater, onPlay, sim, heat, onHeat, onExitSim, is3D, on3D,
+  rain, activeCount, hourCount, live, onReport, showZones, onZones, water, playing, ready, onWater, onPlay, sim, heat, onHeat, onExitSim, is3D, on3D, onLang,
 }) {
   return (
     <>
       <header className="brand">
-        <span className="brand-name">Jaldrishti</span>
-        <h1>{AREA.name}</h1>
+        <div>
+          <span className="brand-name">Jaldrishti</span>
+          <h1>{t('area')}</h1>
+        </div>
+        <Segmented
+          label="Language"
+          value={getLang()}
+          onChange={onLang}
+          options={[
+            { value: 'en', label: 'EN' },
+            { value: 'kn', label: 'ಕನ್ನಡ' },
+          ]}
+        />
       </header>
 
       {rain && (
         <div className="rain">
           <span className="sev-dot" style={{ background: RAIN_DOT[rain.level] }} />
           <div>
-            <b>{rain.en}</b>
-            <p>
-              {rain.mm} mm of rain in the next 24 h · {rain.kn}
-            </p>
+            <b>{t(`rain.${rain.level}`)}</b>
+            <p>{t('rain.mm', rain.mm)}</p>
           </div>
         </div>
       )}
 
       <button type="button" className="btn btn-primary btn-block" onClick={onReport}>
-        <Plus size={18} /> Report waterlogging
+        <Plus size={18} /> {t('report.cta')}
       </button>
       <p className="small muted">
-        {activeCount} active report{activeCount === 1 ? '' : 's'} · {live ? 'updates live' : 'demo mode, saved in this browser only'}
+        {t('counts', { active: activeCount, hour: hourCount })} · {live ? t('live') : t('demoMode')}
       </p>
 
       {ready && (
         <section className="sim">
           <div className="sim-head">
             <div>
-              <b>Flood simulation</b>
-              <p>{waterLabel(water)}</p>
+              <b>{t('sim.title')}</b>
+              <p>{t(`water.${waterStep(water)}`)}</p>
             </div>
             <button type="button" className="btn btn-secondary btn-sm" onClick={onPlay}>
               {playing ? <Pause size={14} /> : <Play size={14} />}
-              {playing ? 'Pause' : 'Simulate'}
+              {playing ? t('sim.pause') : t('sim.play')}
             </button>
           </div>
           <input
@@ -57,22 +64,19 @@ export default function MapPanel({
             max="1"
             step="0.01"
             value={water}
-            aria-label="Simulated water level"
+            aria-label={t('sim.title')}
             onChange={(e) => onWater(Number(e.target.value))}
           />
           <div className="depth-key" aria-hidden="true">
-            <span>~10 cm</span>
+            <span>{t('cm', 10)}</span>
             <i />
-            <span>1 m+</span>
+            <span>{t('cm', 150)}</span>
           </div>
-          <Switch label="Heat map" checked={heat} onChange={onHeat} />
-          <p className="hint-text">
-            Shows which roads flood first as rain gets heavier, worked out from ground height. Hover a blue road to see how deep it is.
-            An illustration, not a forecast.
-          </p>
+          <Switch label={t('sim.heat')} checked={heat} onChange={onHeat} />
+          <p className="hint-text">{t('sim.hint')}</p>
           {sim && (
             <button type="button" className="link" onClick={onExitSim}>
-              Back to the normal map
+              {t('sim.exit')}
             </button>
           )}
         </section>
@@ -80,18 +84,21 @@ export default function MapPanel({
 
       <details className="layers" open={!isNarrow()}>
         <summary>
-          <Layers size={16} /> Map layers
+          <Layers size={16} /> {t('layers')}
         </summary>
-        <Switch label="Flood-prone spots" checked={showZones} onChange={onZones} />
-        {!sim && <Switch label="3D view" checked={is3D} onChange={on3D} />}
+        <Switch label={t('layers.zones')} checked={showZones} onChange={onZones} />
+        {!sim && <Switch label={t('layers.3d')} checked={is3D} onChange={on3D} />}
         <ul className="legend">
-          {Object.entries(SEVERITY).map(([k, s]) => (
-            <li key={k}>
-              <span className="sev-dot" style={{ background: s.color }} />
-              <span>{s.label}</span>
-              <span className="muted">{s.short}</span>
-            </li>
-          ))}
+          {LEVELS.map((n) => {
+            const s = sev(n)
+            return (
+              <li key={n}>
+                <span className="sev-dot" style={{ background: s.color }} />
+                <span>{s.label}</span>
+                <span className="muted">{s.short}</span>
+              </li>
+            )
+          })}
         </ul>
       </details>
     </>

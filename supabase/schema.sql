@@ -74,3 +74,6 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 grant execute on function public.report_history(int) to anon;
+
+-- ---------------------------------------------------------------------------
+-- v3: sensors, alerts and demo data. Run supabase/migrations/003_sensors_alerts.sql.
