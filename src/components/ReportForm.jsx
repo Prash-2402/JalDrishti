@@ -38,9 +38,9 @@ export default function ReportForm({ pin, onPick, onGps, onDone, onCancel, onErr
     setBusy(true)
     try {
       const place = pin.name || (await reverseGeocode(pin))
-      await addReport({ ...pin, severity, note: note.trim(), place, observedAt, photoDataUrl: photo })
+      const saved = await addReport({ ...pin, severity, note: note.trim(), place, observedAt, photoDataUrl: photo })
       onError('')
-      onDone()
+      onDone(saved)
     } catch (err) {
       onError(err.message)
     } finally {

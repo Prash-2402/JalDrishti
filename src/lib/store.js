@@ -66,22 +66,15 @@ export async function addReport({ lat, lng, severity, note, place, observedAt, p
       if (up.error) throw up.error
       row.photo_url = sb.storage.from('report-photos').getPublicUrl(path).data.publicUrl
     }
-    let { error } = await sb.from('reports').insert(row)
+    let { data, error } = await sb.from('reports').insert(row).select().single()
     // Older databases have no "place" column yet: save without it.
-    if (error?.code === 'PGRST204') ({ error } = await sb.from('reports').insert({ ...row, place: undefined }))
+    if (error?.code === 'PGRST204') ({ data, error } = await sb.from('reports').insert({ ...row, place: undefined }).select().single())
     if (error) throw error
-    return
+    return data
   }
-  writeLocal([
-    {
-      ...row,
-      id: crypto.randomUUID(),
-      photo_url: photoDataUrl || null,
-      created_at: new Date().toISOString(),
-      confirmations: 0,
-    },
-    ...readLocal().filter(recent),
-  ])
+  const saved = { ...row, id: crypto.randomUUID(), photo_url: photoDataUrl || null, created_at: new Date().toISOString(), confirmations: 0 }
+  writeLocal([saved, ...readLocal().filter(recent)])
+  return saved
 }
 
 // Every report (active or not) from the last `hours`, newest first, without

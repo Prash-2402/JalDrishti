@@ -220,7 +220,7 @@ function aimAtGround(map, target) {
   }, 300)
 }
 
-const routeColor = () => (simOn ? css('--surface') : css('--route'))
+const routeColor = () => css('--free') // green: the road is free of water and danger
 
 // Colours that differ between the clean map and the simulation.
 function applyLook(map, sim) {
@@ -336,15 +336,21 @@ export function setMapLang(map, lang) {
   }
 }
 
-export function setAlerts(map, alerts) {
+// Water and danger on the map at their real size: alerts, and every active
+// report as a pool of water coloured by depth.
+const ZONE = {
+  wire: () => [css('--sev-3'), WIRE_RADIUS],
+  water: () => [css('--flood-2'), 100],
+  report: (a) => [css(`--flood-${a.severity}`), AVOID_RADIUS[a.severity]],
+}
+export function setAlerts(map, items) {
   if (!map.style) return
   map.getSource('alerts')?.setData({
     type: 'FeatureCollection',
-    features: alerts.map((a) => ({
-      type: 'Feature',
-      properties: { color: css(a.kind === 'wire' ? '--sev-3' : '--flood-2') },
-      geometry: { type: 'Polygon', coordinates: [circleRing(a.lat, a.lng, a.kind === 'wire' ? WIRE_RADIUS : 100, 32)] },
-    })),
+    features: items.map((a) => {
+      const [color, radius] = ZONE[a.kind](a)
+      return { type: 'Feature', properties: { color }, geometry: { type: 'Polygon', coordinates: [circleRing(a.lat, a.lng, radius, 32)] } }
+    }),
   })
 }
 
@@ -378,6 +384,7 @@ export function drawRoute(map, route, fit = true) {
   }
   const bad = route.status === 'blocked' || route.status === 'wire'
   map.setPaintProperty('route-safe', 'line-color', bad ? css('--sev-3') : routeColor())
+  map.setPaintProperty('route-wet', 'line-color', css('--flood-2'))
   fast.setData(route.fastest ? lineFeature(route.fastest.coords) : empty)
   safe.setData(lineFeature(route.safe.coords))
   wet?.setData({ type: 'Feature', geometry: { type: 'MultiLineString', coordinates: route.safe.prof.wet } })

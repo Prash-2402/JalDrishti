@@ -7,18 +7,25 @@
 // route avoiding every known hazard (both requested at once), then up to two
 // more rounds avoiding the water found on the best route so far. Without a
 // key: public OSRM alternatives.
-import { circleRing } from './geo.js'
+import { circleRing, distM } from './geo.js'
 import { profile } from './hazards.js'
 
 const ORS_KEY = import.meta.env.VITE_ORS_KEY
 const MAX_AVOID = 60 // OpenRouteService rejects very large avoid lists
 const cache = new Map() // request -> promise, so repeated routes are instant
 
-const shape = (lngLat, metres, seconds) => ({
-  coords: lngLat.map(([lng, lat]) => [lat, lng]),
-  km: metres / 1000,
-  min: seconds / 60,
-})
+// steps: OpenRouteService turns, as { at (metres along), type, name }.
+function shape(lngLat, metres, seconds, steps = []) {
+  const coords = lngLat.map(([lng, lat]) => [lat, lng])
+  const cum = [0]
+  for (let i = 1; i < coords.length; i++) cum.push(cum[i - 1] + distM({ lat: coords[i - 1][0], lng: coords[i - 1][1] }, { lat: coords[i][0], lng: coords[i][1] }))
+  return {
+    coords,
+    km: metres / 1000,
+    min: seconds / 60,
+    steps: steps.map((s) => ({ at: cum[s.way_points[0]] ?? 0, type: s.type, name: s.name && s.name !== '-' ? s.name : '' })),
+  }
+}
 
 function cached(key, load) {
   if (!cache.has(key)) {
@@ -47,7 +54,9 @@ function ors(start, end, avoid = [], alternatives = false) {
     })
     const out = await res.json()
     if (!res.ok) throw new Error(out?.error?.message || 'Routing failed')
-    return out.features.map((f) => shape(f.geometry.coordinates, f.properties.summary.distance, f.properties.summary.duration))
+    return out.features.map((f) =>
+      shape(f.geometry.coordinates, f.properties.summary.distance, f.properties.summary.duration, (f.properties.segments || []).flatMap((s) => s.steps || [])),
+    )
   })
 }
 

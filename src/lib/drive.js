@@ -10,10 +10,12 @@ import { distM } from './geo.js'
 const empty = { type: 'FeatureCollection', features: [] }
 const SLOW = 0.33 // share of full speed while driving through water
 
-export function createDrive(map, { onTick, onEnd, gps = false }) {
+export function createDrive(map, { onTick, onEnd, gps = false, icon = '🚗' }) {
   const el = document.createElement('div')
   el.className = 'car'
-  const marker = new maplibregl.Marker({ element: el, rotationAlignment: 'map', pitchAlignment: 'map' })
+  el.textContent = icon
+  // The camera turns with the road, so the vehicle always faces up the screen.
+  const marker = new maplibregl.Marker({ element: el })
   let pts = []
   let cum = []
   let total = 0
@@ -105,7 +107,7 @@ export function createDrive(map, { onTick, onEnd, gps = false }) {
     const p = pointAt(at)
     const target = heading(at)
     bearing = bearing == null ? target : bearing + ((((target - bearing) % 360) + 540) % 360 - 180) * Math.min(1, dt * 2.5)
-    marker.setLngLat([p.lng, p.lat]).setRotation(bearing)
+    marker.setLngLat([p.lng, p.lat])
     // Skip the camera while the user is zooming, so their zoom is not cut short.
     if (follow && !map.isZooming()) {
       const view = { center: [p.lng, p.lat], bearing }

@@ -14,6 +14,7 @@ import { createDrive } from './lib/drive.js'
 import { depthAt, floodLines, loadDem, sampleRoads } from './lib/flood.js'
 import { distM } from './lib/geo.js'
 import { buildHazards, isActiveAlert, profile } from './lib/hazards.js'
+import { aiSummary } from './lib/guide.js'
 import { getLang, setLang, t } from './lib/i18n.js'
 import { reverseGeocode } from './lib/places.js'
 import { findRoute } from './lib/routing.js'
@@ -122,6 +123,9 @@ export default function App() {
   const placingRef = useRef(false)
   const placeRef = useRef(null)
   const waterAtRef = useRef(null)
+  const stepsRef = useRef([]) // turns on the current drive route, { at, type, name }
+  const spokenRef = useRef(new Set())
+  const voiceRef = useRef(true)
 
   const [map, setMap] = useState(null)
   const [tab, setTab] = useState('map')
@@ -158,6 +162,7 @@ export default function App() {
   const [rerouting, setRerouting] = useState(false)
   const [placing, setPlacing] = useState(false) // choosing where to put an electricity fault
   const [placeErr, setPlaceErr] = useState(false)
+  const [voice, setVoice] = useState(true)
   const [msg, setMsg] = useState('')
   const [, setTick] = useState(0)
 
@@ -214,9 +219,9 @@ export default function App() {
     tabRef.current = tab
   }, [tab])
   useEffect(() => {
-    placingRef.current = placing
+    placingRef.current = Boolean(placing)
     if (!map) return
-    setPlacingGlow(map, placing)
+    setPlacingGlow(map, placing === 'wire')
     map.getCanvas().style.cursor = placing ? 'crosshair' : ''
   }, [placing, map])
 
@@ -472,8 +477,8 @@ export default function App() {
   const shownAlerts = useMemo(() => (sim ? alerts : alerts.filter((a) => !a.is_simulated)), [alerts, sim])
   const activeAlerts = useMemo(() => shownAlerts.filter((a) => isActiveAlert(a)), [shownAlerts])
   useEffect(() => {
-    if (map) setAlerts(map, activeAlerts)
-  }, [map, activeAlerts])
+    if (map) setAlerts(map, [...activeAlerts, ...shown.map((r) => ({ kind: 'report', lat: r.lat, lng: r.lng, severity: r.severity }))])
+  }, [map, activeAlerts, shown])
   useMarkers(
     map,
     useMemo(() => activeAlerts.filter((a) => a.kind === 'wire').map((a) => ({ key: a.id, lat: a.lat, lng: a.lng })), [activeAlerts]),
@@ -648,7 +653,11 @@ export default function App() {
         return
       }
       const oldRest = d.slice(d.at)
-      const coords = [...d.slice(d.at, Math.max(d.at, originAt)), ...r.safe.coords]
+      const lead = d.slice(d.at, Math.max(d.at, originAt))
+      const coords = [...lead, ...r.safe.coords]
+      const leadM = lineM(lead)
+      stepsRef.current = (r.safe.steps || []).map((s) => ({ ...s, at: s.at + leadM }))
+      spokenRef.current = new Set()
       d.reroute(coords)
       const prof = profile(coords, hz, w, modeCfg.avoidCm, [end])
       knownRef.current = prof.spots
@@ -690,7 +699,14 @@ export default function App() {
     const spot = prof.spots.find((s) => s.at > 40) // water under the vehicle cannot be avoided any more
     const wireFirst = prof.hard && (!spot || prof.hard.at < spot.at)
     const next = wireFirst ? { kind: 'wire', m: prof.hard.at } : spot ? { kind: 'water', cm: spot.cm, m: spot.at } : null
-    setDriveInfo((i) => i && { ...i, leftM, leftMin, next, inWater: inWater?.cm || 0 })
+    // The next turn, spoken once when it is 150 m away (not at fast demo speeds).
+    const step = stepsRef.current.find((s) => s.at > at + 8 && s.type !== 11)
+    const turn = step && { type: step.type, name: step.name, m: step.at - at }
+    if (turn && turn.m < 150 && !spokenRef.current.has(step.at) && (d.gps || speed <= 5)) {
+      spokenRef.current.add(step.at)
+      say(turnText(turn))
+    }
+    setDriveInfo((i) => i && { ...i, leftM, leftMin, next, inWater: inWater?.cm || 0, turn })
 
     if (st.strict && !prof.hard) {
       st.strict = false // the electricity was cleared: carry on
@@ -729,6 +745,7 @@ export default function App() {
     popupRef.current?.remove()
     const d = createDrive(map, {
       gps,
+      icon: mode === 'bike' ? '🛵' : '🚗',
       onTick: (info) => tickRef.current?.(info),
       onEnd: () => setDriveInfo((i) => i && { ...i, arrived: true, next: null }),
     })
@@ -738,7 +755,10 @@ export default function App() {
     rerouteRef.current = { busy: false, last: 0, strict: false, gate: null }
     d.setSpeed(speed)
     d.start(route.safe.coords, route.safe.min)
+    stepsRef.current = route.safe.steps || []
+    spokenRef.current = new Set()
     setDriveInfo({ leftM: route.safe.km * 1000, leftMin: route.safe.min, next: null, gps })
+    announce(route)
     setPaused(false)
     drawRoute(map, route, false)
   }
@@ -750,6 +770,38 @@ export default function App() {
     setBanner(null)
     setRouteNonce((n) => n + 1)
     map?.easeTo({ pitch: sim || is3D ? 55 : 0, bearing: 0, zoom: 13.5, duration: 900, padding: viewPadding() })
+  }
+
+  // Directions out loud, in the app's language.
+  const say = (text) => {
+    if (!voiceRef.current || !window.speechSynthesis || !text) return
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = getLang() === 'kn' ? 'kn-IN' : 'en-IN'
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(u)
+  }
+  const turnText = (s) => t(`turn.${s.type}`) + (s.name ? t('turn.onto', s.name) : '')
+  // A short summary when a drive starts, written by Grok if it is set up.
+  const announce = (r) => {
+    const { maxCm, spots, hard } = r.safe.prof
+    const base = t('sum.base', { km: r.safe.km.toFixed(1), min: Math.round(r.safe.min) })
+    const text = `${base} ${hard ? t('sum.wire') : maxCm ? t('sum.wet', { cm: maxCm, n: spots.length }) : t('sum.free')}`
+    setBanner({ tone: 'info', text, auto: 8000 })
+    say(text)
+    aiSummary({
+      lang: getLang(),
+      vehicle: mode,
+      km: Number(r.safe.km.toFixed(1)),
+      min: Math.round(r.safe.min),
+      status: r.status,
+      maxWaterCm: maxCm,
+      wetStretches: spots.length,
+      turns: (r.safe.steps || []).slice(0, 8).map((s) => ({ do: t(`turn.${s.type}`), road: s.name, afterKm: Number((s.at / 1000).toFixed(1)) })),
+    }).then((ai) => {
+      if (!ai || !driveRef.current) return
+      setBanner({ tone: 'info', text: ai, auto: 10000 })
+      say(ai)
+    })
   }
 
   // Demo triggers.
@@ -768,17 +820,26 @@ export default function App() {
     return h ? h.cm : 0
   }
   waterAtRef.current = waterAt
-  const startPlacing = () => {
+  const startPlacing = (kind = 'wire') => {
+    if (kind === 'water') {
+      popupRef.current?.remove()
+      setPlaceErr(false)
+      return setPlacing('water')
+    }
     const anyWater = waterRef.current > 0 || buildHazards(reportsRef.current, shownAlerts).some((h) => !h.hard && h.cm >= 10)
     if (!anyWater) return setMsg(t('place.none'))
     popupRef.current?.remove()
     setPlaceErr(false)
-    setPlacing(true)
+    setPlacing('wire')
   }
   // A tap while placing: snap to the nearest flooded road within 60 m, else
   // accept it inside a report or water alert, else explain and shake.
   placeRef.current = (e) => {
     const tap = { lat: e.lngLat.lat, lng: e.lngLat.lng }
+    if (placing === 'water') {
+      setPlacing(false)
+      return sendAlert({ kind: 'water', ...tap, cm: 45, place: roadNameAt(map, e.point) || t('road.road') }).catch((err) => setMsg(err.message))
+    }
     let best = null
     const box = [[e.point.x - 30, e.point.y - 30], [e.point.x + 30, e.point.y + 30]]
     for (const f of map.queryRenderedFeatures(box, { layers: ['road-water'] })) {
@@ -909,9 +970,14 @@ export default function App() {
           setPin(null)
           setPick(null)
         }}
-        onDone={() => {
+        onDone={(saved) => {
           setReporting(false)
           setPin(null)
+          if (saved) {
+            setReports((rows) => [saved, ...rows.filter((x) => x.id !== saved.id)])
+            focus(saved, 16)
+            setTimeout(() => showReport(saved), 950)
+          }
           refresh()
         }}
         onError={setMsg}
@@ -1054,7 +1120,7 @@ export default function App() {
 
       <main className="map-wrap">
         <div ref={boxRef} className="map" />
-        {sim && <DemoMenu driving={Boolean(driveInfo)} onReplay={startReplay} onRaise={raiseWater} onPlace={startPlacing} onClear={() => clearDemoAlerts(alerts).catch((e) => setMsg(e.message))} />}
+        {sim && <DemoMenu driving={Boolean(driveInfo)} onReplay={startReplay} onRaise={raiseWater} onWater={() => startPlacing('water')} onPlace={() => startPlacing('wire')} onClear={() => clearDemoAlerts(alerts).catch((e) => setMsg(e.message))} />}
         <div className="map-top">
           {[alarm, banner].map(
             (b, i) =>
@@ -1078,7 +1144,7 @@ export default function App() {
           )}
           {placing && (
             <div className={`map-banner${placeErr ? ' shake' : ''}`} role="status">
-              <span>{placeErr ? t('place.dry') : t('place.tap')}</span>
+              <span>{placing === 'water' ? t('place.tapWater') : placeErr ? t('place.dry') : t('place.tap')}</span>
               <button type="button" className="icon-btn" aria-label={t('cancel')} onClick={() => setPlacing(false)}>
                 <X size={16} />
               </button>
@@ -1126,6 +1192,12 @@ export default function App() {
             onReroute={() => reroute({ kind: 'manual' }, true)}
             onWait={gateWait}
             onGo={gateGo}
+            voice={voice}
+            onVoice={() => {
+              voiceRef.current = !voice
+              if (voice) window.speechSynthesis?.cancel()
+              setVoice(!voice)
+            }}
           />
         )}
       </main>

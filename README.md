@@ -28,6 +28,8 @@ Switch at the top of the Map tab.
 - **Saved trips**: save a trip and see its status ("Clear", "1 report on your route", "Electrical danger on your route"). A browser notification fires when danger lands on it while the app is in the background.
 
 **Drive**
+- Turn-by-turn directions like a maps app: the next turn with its arrow, road name and distance, spoken aloud in English or Kannada (voice button in the drive panel). Your vehicle shows as 🛵 or 🚗.
+- A green route means the road is free; blue stretches have water; red means it cannot be passed.
 - **Start drive** moves a vehicle along the route with the camera behind it (1×, 5×, 10×). **Use my real location** follows your phone's GPS instead.
 - The road ahead is checked continuously. When water rises or danger appears ahead, the route is re-planned from just ahead of the vehicle without stopping.
 - **Water never forces a stop.** If every route has water, it takes the one with the least and drives through it at a third of the speed. Before water deeper than the vehicle can handle, it eases to a halt and asks: **Wait** or **Go through slowly**.
@@ -50,8 +52,9 @@ The **Demo** button on the map triggers what sensors would do, for judging and t
 
 1. **Replay Sept 2022**: the Aug–Sept 2022 Bellandur floods in 60 seconds, from real hourly rainfall.
 2. **Raise water ahead** (during a drive): floods the road 600 m ahead; watch the route change.
-3. **Place electricity fault**: tap a flooded road to put a fault there. Taps away from water are refused.
-4. **Clear demo events**.
+3. **Place water**: tap any road to put knee-deep water there.
+4. **Place electricity fault**: tap a flooded road to put a fault there. Taps away from water are refused.
+5. **Clear demo events**.
 
 A good two-minute demo: save a Home → Office trip, start the drive, raise water ahead, then place an electricity fault on a flooded road ahead. Open the app on a phone too: the alert appears there as well.
 
@@ -78,6 +81,16 @@ Then open http://localhost:5173. Without keys it runs in demo mode: reports and 
 Without migration 003, alerts still reach other open devices but are not stored.
 
 `.npmrc` points npm at a mirror of the npm registry because some networks block the main one. Delete it if `npm install` works without it.
+
+## Grok route summary (optional)
+
+When a drive starts, the app speaks a short summary. Out of the box it writes this itself. To have Grok (xAI) write it, with the first turns and road names:
+
+1. In Supabase: **Edge Functions → Secrets**, add `XAI_API_KEY` (your xAI key). Optional: `XAI_MODEL` (default `grok-3-mini`).
+2. Deploy the function in `supabase/functions/guide` (`supabase functions deploy guide`, or create a function named `guide` in the dashboard and paste the file).
+3. Set `VITE_GROK_GUIDE=on` in `.env` and in Vercel's environment variables, then redeploy.
+
+The key stays on the server; it is never put in the app. Turn-by-turn directions come from OpenRouteService and work without Grok.
 
 ## Real sensors
 
